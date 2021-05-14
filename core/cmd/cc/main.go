@@ -5,8 +5,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/jm33-m0/emp3r0r/core/internal/agent"
-	"github.com/jm33-m0/emp3r0r/core/internal/cc"
+	"github.com/jm33-m0/emp3r0r/core/lib/agent"
+	"github.com/jm33-m0/emp3r0r/core/lib/cc"
 	cdn2proxy "github.com/jm33-m0/go-cdn2proxy"
 )
 
@@ -14,6 +14,7 @@ func main() {
 	go cc.TLSServer()
 
 	cdnproxy := flag.String("cdn2proxy", "", "Start cdn2proxy server on this port")
+	apiserver := flag.Bool("api", false, "Run API server in background, you can send commands to /tmp/emp3r0r.socket")
 	flag.Parse()
 
 	if *cdnproxy != "" {
@@ -34,5 +35,9 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// use emp3r0r in terminal or from other frontend
+	if *apiserver {
+		go cc.APIMain()
+	}
 	cc.CliMain()
 }

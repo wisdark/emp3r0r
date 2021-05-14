@@ -4,38 +4,69 @@ linux post-exploitation framework made by linux user
 **Still under active development**
 
 - [中文介绍](https://www.freebuf.com/sectool/259079.html)
-
-- [see my blog for updates](https://jm33.me/emp3r0r-0x00.html)
+- [check my blog for updates](https://jm33.me/emp3r0r-0x00.html)
 - [how to use](https://github.com/jm33-m0/emp3r0r/wiki)
+- **collaborators wanted!!!** please [contact me](https://jm33.me/pages/got-something-to-say.html) if you are interested
+- **cross-platform** support is in progress, contribute if you want emp3r0r to run on other systems
+- **Windows** is officially supported with core features enabled, but it **won't** be open sourced. however, you can **port emp3r0r to any platforms** that golang supports, with the codebase provided here, ask any questions in [this thread](https://github.com/jm33-m0/emp3r0r/discussions/24)
 
+![logo](./img/emp3r0r.png)
+
+![reverse_proxy](./img/reverse_proxy.png)
 ____
 
 ## table of contents
 
 <!-- vim-markdown-toc GFM -->
 
+* [what to expect (in future releases)](#what-to-expect-in-future-releases)
 * [why another post-exploitation tool?](#why-another-post-exploitation-tool)
 * [what does it do](#what-does-it-do)
     * [glance](#glance)
     * [core features](#core-features)
         * [transports](#transports)
         * [auto proxy for agents without direct internet access](#auto-proxy-for-agents-without-direct-internet-access)
+        * [anti-antivirus (or anti-whateveryoucallthem)](#anti-antivirus-or-anti-whateveryoucallthem)
         * [agent traffic](#agent-traffic)
+        * [packer - start agent in memory](#packer---start-agent-in-memory)
+        * [dropper - pure memory based agent launching](#dropper---pure-memory-based-agent-launching)
         * [hide processes and files](#hide-processes-and-files)
         * [persistence](#persistence)
     * [modules](#modules)
+        * [reverse proxy](#reverse-proxy)
+        * [shellcode injection](#shellcode-injection)
+        * [shellcode loader](#shellcode-loader)
         * [basic command shell](#basic-command-shell)
         * [fully interactive and stealth bash shell](#fully-interactive-and-stealth-bash-shell)
         * [credential harvesting](#credential-harvesting)
         * [auto root](#auto-root)
         * [LPE suggest](#lpe-suggest)
         * [port mapping](#port-mapping)
+        * [reverse port mapping (interoperability with other frameworks)](#reverse-port-mapping-interoperability-with-other-frameworks)
         * [plugin system](#plugin-system)
-    * [roadmap](#roadmap)
 * [thanks](#thanks)
 
 <!-- vim-markdown-toc -->
 ____
+
+## what to expect (in future releases)
+
+- [x] packer: cryptor + `memfd_create`
+- [x] packer: use `shm_open` in older Linux kernels
+- [x] dropper: shellcode injector - python
+- [x] port mapping: forward from CC to agents, so you can use encapsulate other tools (such as Cobalt Strike) in emp3r0r's CC tunnel
+- [x] randomize everything that can be randomized (file path, port number, etc)
+- [x] injector: shellcode loader, using python2
+- [x] injector: inject shellcode into arbitrary process, using go and ptrace syscall
+- [x] injector: recover process after injection
+- [x] persistence: inject guardian shellcode into arbitrary process to gain persistence
+- [x] **headless CC**, control using existing commands, can be useful when we write a web-based GUI
+- [x] screenshot, supports both windows and linux
+- [x] reverse proxy
+- [ ] network scanner
+- [ ] passive scanner, for host/service discovery
+- [ ] password spray
+- [ ] auto pwn using weak credentials and RCEs
 
 ## why another post-exploitation tool?
 
@@ -61,6 +92,7 @@ i hope this tool helps you, and i will add features to it as i learn new things
 * **post-exploitation tools** like nmap, socat, are integreted with reverse shell
 * **credential harvesting**
 * process **injection**
+* **shellcode** injection and dropper
 * ELF **patcher**
 * **hide processes and files** via libc hijacking
 * port mapping, socks5 **proxy**
@@ -70,10 +102,14 @@ i hope this tool helps you, and i will add features to it as i learn new things
 * file management
 * log cleaner
 * **stealth** connection
+* screenshot
+* anti-antivirus
 * internet access checker
 * **autoproxy** for semi-isolated networks
+* **reverse proxy** to bring every host online
 * all of these in one **HTTP2** connection
 * can be encapsulated in any external proxies such as **TOR**, and **CDNs**
+* interoperability with **metasploit / Cobalt Strike**
 * and many more...
 
 ### core features
@@ -98,6 +134,13 @@ in the following example, we have 3 agents, among which only one (`[1]`) has int
 
 ![autoproxy](./img/autoproxy.webp)
 
+#### anti-antivirus (or anti-whateveryoucallthem)
+
+- a cryptor that loads agent into memory
+- shellcode dropper
+- everything is randomized
+- one agent build for each target
+
 #### agent traffic
 
 every time an agent starts, it checks a preset URL for CC status, if it knows CC is offline, no further action will be executed, it waits for CC to go online
@@ -116,6 +159,23 @@ when using Cloudflare CDN as CC frontend:
 
 ![cdn](./img/cdn.webp)
 
+
+#### packer - start agent in memory
+
+[packer](https://github.com/jm33-m0/emp3r0r/wiki/Packer) encrypts `agent` binary, and runs it from memory (using `memfd_create`)
+
+currently emp3r0r is mostly memory-based, if used with this packer
+
+![packer](./img/packer.webp)
+
+#### dropper - pure memory based agent launching
+
+[dropper](https://github.com/jm33-m0/emp3r0r/wiki/Dropper) drops a shellcode or script on your target, eventually runs your agent, in a stealth way
+
+below is a screenshot of a python based shellcode delivery to agent execution:
+
+![dropper](./img/dropper.webp)
+
 #### hide processes and files
 
 currently emp3r0r uses [libemp3r0r](https://github.com/jm33-m0/emp3r0r/tree/master/libemp3r0r) to hide its files and processes, which utilizes glibc hijacking
@@ -124,6 +184,7 @@ currently emp3r0r uses [libemp3r0r](https://github.com/jm33-m0/emp3r0r/tree/mast
 
 currently implemented methods:
 
+- [shellcode injection](#shellcode-injection)
 - [libemp3r0r](https://github.com/jm33-m0/emp3r0r/tree/master/libemp3r0r)
 - cron
 - bash profile and command injection
@@ -131,6 +192,32 @@ currently implemented methods:
 more will be added in the future
 
 ### modules
+
+#### reverse proxy
+
+think it as `ssh -R`, when autoproxy module doesn't work because of the **firewall** on the agent that provides proxy service, what can you do?
+
+in normal circumstances, we would use `ssh -R` to map our client-side port to the ssh server, so the server can connect to us to share our internet connection.
+
+thats exactly what emp3r0r does, except it doesn't require any openssh binaries to be installed, type `use reverse_proxy` to get started!
+
+with this feature you can bring **every host that you can reach** to emp3r0r CC server.
+
+![reverse_proxy](./img/reverse_proxy.webp)
+
+#### shellcode injection
+
+inject guardian shellcode into arbitrary process, to gain persistence
+
+![shellcode injection](./img/shellcode-inject.webp)
+
+#### shellcode loader
+
+this module helps you execute meterpreter or Cobalt Strike shellcode directly in emp3r0r's memory,
+combined with [reverse_portfwd](#reverse-port-mapping-interoperability-with-other-frameworks),
+you can use other post-exploitation frameworks right inside emp3r0r
+
+![shellcode loader](./img/shellcode_loader-msf.webp)
 
 #### basic command shell
 
@@ -155,6 +242,10 @@ emp3r0r's terminal supports **everything your current terminal supports**, you c
 but wait, it's more than just a reverse bash shell, with [module vaccine](https://github.com/jm33-m0/static-bins/tree/main/vaccine), you can use whatever tool you like on your target system
 
 ![bash](./img/bash.webp)
+
+you can also have it on Windows targets:
+
+![windows_rshell](./img/windows_rshell.webp)
 
 #### credential harvesting
 
@@ -185,6 +276,12 @@ map any target addresses to CC side, using HTTP2 (or whatever transport your age
 
 ![port_fwd.png](./img/port_fwd.png.webp)
 
+#### reverse port mapping (interoperability with other frameworks)
+
+this screenshot shows a [meterpreter](https://www.offensive-security.com/metasploit-unleashed/meterpreter-basics/) session established with the help of `emp3r0r`
+
+![reverse port mapping](./img/reverse_portfwd.webp)
+
 #### plugin system
 
 yes, there is a plugin system. please read the [wiki](https://github.com/jm33-m0/emp3r0r/wiki/Plugins) for more information
@@ -193,20 +290,11 @@ yes, there is a plugin system. please read the [wiki](https://github.com/jm33-m0
 
 ![plugins-bash.png](./img/plugins-bash.png.webp)
 
-### roadmap
-
-heres a list of features i plan to add
-
-- port mapping among agents
-- network scanner
-- passive scanner, for host/service discovery
-- exploit kit
-- conservative weak credentials scanner
-- auto pwn using weak credentials and RCEs
-
 ## thanks
 
 - [pty](https://github.com/creack/pty)
+- [guitmz](https://github.com/guitmz)
+- [sektor7](https://blog.sektor7.net/#!res/2018/pure-in-memory-linux.md)
 - [readline](https://github.com/bettercap/readline)
 - [h2conn](https://github.com/posener/h2conn)
 - [diamorphine](https://github.com/m0nad/Diamorphine)
