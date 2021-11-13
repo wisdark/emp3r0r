@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jm33-m0/emp3r0r/core/lib/agent"
+	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
 	"github.com/mholt/archiver"
 )
@@ -26,7 +26,7 @@ func TakeScreenshot() {
 	// then we handle the cmd output in agentHandler
 }
 
-func processScreenshot(out string, target *agent.SystemInfo) (err error) {
+func processScreenshot(out string, target *emp3r0r_data.SystemInfo) (err error) {
 	if strings.Contains(out, "Error") {
 		return fmt.Errorf(out)
 	}
@@ -43,7 +43,7 @@ func processScreenshot(out string, target *agent.SystemInfo) (err error) {
 	// be sure we have downloaded the file
 	for {
 		time.Sleep(100 * time.Millisecond)
-		if !util.IsFileExist(FileGetDir+path+".emp3r0r") &&
+		if !util.IsFileExist(FileGetDir+path+".downloading") &&
 			util.IsFileExist(FileGetDir+path) {
 			break
 		}
@@ -62,7 +62,8 @@ func processScreenshot(out string, target *agent.SystemInfo) (err error) {
 	// open it if possible
 	if util.IsCommandExist("xdg-open") &&
 		os.Getenv("DISPLAY") != "" {
-		CliPrintInfo("Seems like we can open the picture for you to view, hold on")
+		CliPrintInfo("Seems like we can open the picture (%s) for you to view, hold on",
+			FileGetDir+path)
 		cmd := exec.Command("xdg-open", FileGetDir+path)
 		err = cmd.Start()
 		if err != nil {

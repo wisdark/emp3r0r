@@ -14,7 +14,7 @@ import (
 
 	"github.com/bettercap/readline"
 	"github.com/fatih/color"
-	"github.com/jm33-m0/emp3r0r/core/lib/agent"
+	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 )
 
 const PromptName = "emp3r0r"
@@ -46,10 +46,37 @@ func CliMain() {
 		readline.PcItem("use",
 			readline.PcItemDynamic(listMods())),
 
+		readline.PcItem("rm",
+			readline.PcItemDynamic(listDir())),
+
+		readline.PcItem("mv",
+			readline.PcItemDynamic(listDir())),
+
+		readline.PcItem("mkdir",
+			readline.PcItemDynamic(listDir())),
+
+		readline.PcItem("cp",
+			readline.PcItemDynamic(listDir())),
+
+		readline.PcItem("cd",
+			readline.PcItemDynamic(listDir())),
+
+		readline.PcItem("get",
+			readline.PcItemDynamic(listDir())),
+
+		readline.PcItem("vim",
+			readline.PcItemDynamic(listDir())),
+
+		readline.PcItem("put",
+			readline.PcItemDynamic(listFiles("./"))),
+
 		readline.PcItem(HELP,
 			readline.PcItemDynamic(listMods())),
 
 		readline.PcItem("target",
+			readline.PcItemDynamic(listTargetIndexTags())),
+
+		readline.PcItem("label",
 			readline.PcItemDynamic(listTargetIndexTags())),
 
 		readline.PcItem("delete_port_fwd",
@@ -59,7 +86,17 @@ func CliMain() {
 	for cmd := range Commands {
 		if cmd == "set" ||
 			cmd == "use" ||
+			cmd == "get" ||
+			cmd == "vim" ||
+			cmd == "put" ||
+			cmd == "cp" ||
+			cmd == "mkdir" ||
 			cmd == "target" ||
+			cmd == "label" ||
+			cmd == "delete_port_fwd" ||
+			cmd == "rm" ||
+			cmd == "mv" ||
+			cmd == "cd" ||
 			cmd == HELP {
 			continue
 		}
@@ -139,25 +176,49 @@ start:
 // SetDynamicPrompt set prompt with module and target info
 func SetDynamicPrompt() {
 	shortName := "local" // if no target is selected
-	if CurrentTarget != nil {
+	if CurrentTarget != nil && IsAgentExist(CurrentTarget) {
 		shortName = strings.Split(CurrentTarget.Tag, "-agent")[0]
 	}
 	if CurrentMod == "<blank>" {
 		CurrentMod = "none" // if no module is selected
 	}
 	dynamicPrompt := fmt.Sprintf("%s @%s (%s) "+color.HiCyanString("> "),
-		color.HiCyanString(PromptName),
-		color.CyanString(shortName),
-		color.HiBlueString(CurrentMod),
+		color.New(color.Bold, color.FgHiCyan).Sprint(PromptName),
+		color.New(color.FgCyan, color.Underline).Sprint(shortName),
+		color.New(color.FgHiBlue).Sprint(CurrentMod),
 	)
 	EmpReadLine.Config.Prompt = dynamicPrompt
 	EmpReadLine.SetPrompt(dynamicPrompt)
 }
 
-// CliPrintInfo print log in blue
-func CliPrintInfo(format string, a ...interface{}) {
-	if DebugLevel == 0 {
+// CliPrintDebug print log in blue
+func CliPrintDebug(format string, a ...interface{}) {
+	if DebugLevel >= 3 {
 		log.Println(color.BlueString(format, a...))
+		if IsAPIEnabled {
+			// send to socket
+			var resp APIResponse
+			msg := GetDateTime() + " DEBUG: " + fmt.Sprintf(format, a...)
+			resp.MsgData = []byte(msg)
+			resp.Alert = false
+			resp.MsgType = LOG
+			data, err := json.Marshal(resp)
+			if err != nil {
+				log.Printf("CliPrintDebug: %v", err)
+				return
+			}
+			_, err = APIConn.Write([]byte(data))
+			if err != nil {
+				log.Printf("CliPrintDebug: %v", err)
+			}
+		}
+	}
+}
+
+// CliPrintInfo print log in hiblue
+func CliPrintInfo(format string, a ...interface{}) {
+	if DebugLevel >= 2 {
+		log.Println(color.HiBlueString(format, a...))
 		if IsAPIEnabled {
 			// send to socket
 			var resp APIResponse
@@ -178,10 +239,10 @@ func CliPrintInfo(format string, a ...interface{}) {
 	}
 }
 
-// CliPrintWarning print log in yellow
+// CliPrintWarning print log in hiyellow
 func CliPrintWarning(format string, a ...interface{}) {
-	if DebugLevel <= 1 {
-		log.Println(color.YellowString(format, a...))
+	if DebugLevel >= 1 {
+		log.Println(color.HiYellowString(format, a...))
 		if IsAPIEnabled {
 			// send to socket
 			var resp APIResponse
@@ -202,9 +263,55 @@ func CliPrintWarning(format string, a ...interface{}) {
 	}
 }
 
+// CliMsg print log in cyan, regardless of debug level
+func CliMsg(format string, a ...interface{}) {
+	log.Println(color.CyanString(format, a...))
+	if IsAPIEnabled {
+		// send to socket
+		var resp APIResponse
+		msg := GetDateTime() + " MSG: " + fmt.Sprintf(format, a...)
+		resp.MsgData = []byte(msg)
+		resp.Alert = false
+		resp.MsgType = LOG
+		data, err := json.Marshal(resp)
+		if err != nil {
+			log.Printf("CliMsg: %v", err)
+			return
+		}
+		_, err = APIConn.Write([]byte(data))
+		if err != nil {
+			log.Printf("CliMsg: %v", err)
+		}
+	}
+}
+
+// CliAlert print log in blinking text
+func CliAlert(textColor color.Attribute, format string, a ...interface{}) {
+	alertColor := color.New(color.Bold, textColor, color.BlinkSlow)
+	log.Print(alertColor.Sprintf(format, a...))
+	if IsAPIEnabled {
+		// send to socket
+		var resp APIResponse
+		msg := GetDateTime() + " ALERT: " + fmt.Sprintf(format, a...)
+		resp.MsgData = []byte(msg)
+		resp.Alert = false
+		resp.MsgType = LOG
+		data, err := json.Marshal(resp)
+		if err != nil {
+			log.Printf("CliAlert: %v", err)
+			return
+		}
+		_, err = APIConn.Write([]byte(data))
+		if err != nil {
+			log.Printf("CliAlert: %v", err)
+		}
+	}
+}
+
 // CliPrintSuccess print log in green
 func CliPrintSuccess(format string, a ...interface{}) {
-	log.Println(color.HiGreenString(format, a...))
+	successColor := color.New(color.Bold, color.FgHiGreen)
+	log.Print(successColor.Sprintf(format, a...))
 	if IsAPIEnabled {
 		// send to socket
 		var resp APIResponse
@@ -226,7 +333,8 @@ func CliPrintSuccess(format string, a ...interface{}) {
 
 // CliPrintError print log in red
 func CliPrintError(format string, a ...interface{}) {
-	log.Println(color.HiRedString(format, a...))
+	errorColor := color.New(color.Bold, color.FgHiRed)
+	log.Print(errorColor.Sprintf(format, a...))
 	if IsAPIEnabled {
 		// send to socket
 		var resp APIResponse
@@ -310,7 +418,7 @@ func CliBanner() error {
 	}
 
 	color.Cyan(string(data))
-	color.Cyan("version: %s\n\n", agent.Version)
+	color.Cyan("version: %s\n\n", emp3r0r_data.Version)
 	return nil
 }
 
@@ -336,7 +444,7 @@ func CliPrettyPrint(header1, header2 string, map2write *map[string]string) {
 		}
 	}
 
-	cnt := 10
+	cnt := 18
 	sep := strings.Repeat(" ", cnt)
 	color.Cyan("%s%s%s\n", header1, sep, header2)
 
@@ -372,19 +480,22 @@ bTAvZW1wM3IwcgoKCg==
 func listValChoices() func(string) []string {
 	return func(line string) []string {
 		switch CurrentMod {
-		case agent.ModCMD_EXEC:
+		case emp3r0r_data.ModCMD_EXEC:
 			return Options["cmd_to_exec"].Vals
-		case agent.ModCLEAN_LOG:
+		case emp3r0r_data.ModSHELL:
+			ret := append(Options["shell"].Vals, Options["port"].Vals...)
+			return ret
+		case emp3r0r_data.ModCLEAN_LOG:
 			return Options["keyword"].Vals
-		case agent.ModLPE_SUGGEST:
+		case emp3r0r_data.ModLPE_SUGGEST:
 			return Options["lpe_helper"].Vals
-		case agent.ModPERSISTENCE:
+		case emp3r0r_data.ModPERSISTENCE:
 			return Options["method"].Vals
-		case agent.ModPROXY:
+		case emp3r0r_data.ModPROXY:
 			return append(Options["status"].Vals, Options["port"].Vals...)
-		case agent.ModINJECTOR:
+		case emp3r0r_data.ModINJECTOR:
 			return append(Options["pid"].Vals, Options["method"].Vals...)
-		case agent.ModPORT_FWD:
+		case emp3r0r_data.ModPORT_FWD:
 			ret := append(Options["listen_port"].Vals, Options["to"].Vals...)
 			ret = append(ret, Options["switch"].Vals...)
 			return ret
@@ -437,6 +548,17 @@ func listOptions() func(string) []string {
 
 		for opt := range Options {
 			names = append(names, opt)
+		}
+		return names
+	}
+}
+
+// autocomplete items in current directory
+func listDir() func(string) []string {
+	return func(line string) []string {
+		names := make([]string, 0)
+		for _, name := range LsDir {
+			names = append(names, name)
 		}
 		return names
 	}

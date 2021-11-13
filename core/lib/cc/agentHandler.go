@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/jm33-m0/emp3r0r/core/lib/agent"
+	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/tun"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
 	"github.com/olekukonko/tablewriter"
@@ -26,12 +26,17 @@ var CmdResults = make(map[string]string)
 var CmdResultsMutex = &sync.Mutex{}
 
 // processAgentData deal with data from agent side
-func processAgentData(data *agent.MsgTunData) {
-	payloadSplit := strings.Split(data.Payload, agent.OpSep)
+func processAgentData(data *emp3r0r_data.MsgTunData) {
+	payloadSplit := strings.Split(data.Payload, emp3r0r_data.OpSep)
 	op := payloadSplit[0]
 
 	target := GetTargetFromTag(data.Tag)
 	contrlIf := Targets[target]
+	if target == nil || contrlIf == nil {
+		CliPrintError("Target %s cannot be found, however, it left a message saying:\n%v",
+			data.Tag, payloadSplit)
+		return
+	}
 
 	switch op {
 
@@ -61,12 +66,6 @@ func processAgentData(data *agent.MsgTunData) {
 			}
 		}
 
-		// if cmd is `bash`, our shell is likey broken
-		if strings.HasPrefix(cmd, "bash") {
-			shellToken := strings.Split(cmd, " ")[1]
-			RShellStatus[shellToken] = fmt.Errorf("Reverse shell error: %v", out)
-		}
-
 		// screenshot command
 		if strings.HasPrefix(cmd, "screenshot") {
 			go func() {
@@ -92,6 +91,7 @@ func processAgentData(data *agent.MsgTunData) {
 			table := tablewriter.NewWriter(tableString)
 			table.SetHeader([]string{"Name", "PID", "PPID", "User"})
 			table.SetBorder(true)
+			table.SetRowLine(true)
 			table.SetAutoWrapText(true)
 
 			// color
@@ -111,8 +111,10 @@ func processAgentData(data *agent.MsgTunData) {
 			}
 			table.AppendBulk(tdata)
 			table.Render()
-			CliPrintInfo("Listing processes:\033[0m\n%s", tableString.String())
-			return
+			// CliMsg("Listing processes:\033[0m\n%s", tableString.String())
+			// return
+			out = tableString.String()
+			outLines = strings.Split(out, "\n")
 		}
 
 		// ls command
@@ -124,11 +126,14 @@ func processAgentData(data *agent.MsgTunData) {
 				return
 			}
 
+			LsDir = nil // clear cache
+
 			// build table
 			tdata := [][]string{}
 			tableString := &strings.Builder{}
 			table := tablewriter.NewWriter(tableString)
 			table.SetHeader([]string{"Name", "Type", "Size", "Time", "Permission"})
+			table.SetRowLine(true)
 			table.SetBorder(true)
 
 			// color
@@ -147,11 +152,18 @@ func processAgentData(data *agent.MsgTunData) {
 			// fill table
 			for _, d := range dents {
 				tdata = append(tdata, []string{d.Name, d.Ftype, d.Size, d.Date, d.Permission})
+				if d.Ftype == "file" {
+					LsDir = append(LsDir, d.Name)
+				} else {
+					LsDir = append(LsDir, d.Name+"/")
+				}
 			}
 			table.AppendBulk(tdata)
 			table.Render()
-			CliPrintInfo("Listing current path:\033[0m\n%s", tableString.String())
-			return
+			// CliMsg("Listing current path:\033[0m\n%s", tableString.String())
+			// return
+			out = tableString.String()
+			outLines = strings.Split(out, "\n")
 		}
 
 		// optimize output

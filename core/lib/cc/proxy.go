@@ -9,13 +9,13 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/fatih/color"
 	"github.com/google/uuid"
-	"github.com/jm33-m0/emp3r0r/core/lib/agent"
+	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/tun"
+	"github.com/olekukonko/tablewriter"
 )
 
 // PortFwdSession holds controller interface of a port-fwd session
@@ -23,16 +23,19 @@ type PortFwdSession struct {
 	Lport       string // listen_port
 	To          string // to address
 	Description string // fmt.Sprintf("%s (Local) -> %s (Agent)", listenPort, to_addr)
+	Reverse     bool   // from agent to cc or cc to agent
 
-	Agent  *agent.SystemInfo         // agent who holds this port mapping session
+	Agent  *emp3r0r_data.SystemInfo  // agent who holds this port mapping session
 	Sh     map[string]*StreamHandler // related to HTTP handler
 	Ctx    context.Context           // PortFwd context
 	Cancel context.CancelFunc        // PortFwd cancel
 }
 
 type mapping struct {
-	id          string // portfwd id
-	description string // details
+	Id          string `json:"id"`    // portfwd id
+	Agent       string `json:"agent"` // agent tag
+	Reverse     bool   `json:"reverse"`
+	Description string `json:"description"` // details
 }
 
 func headlessListPortFwds() (err error) {
@@ -43,8 +46,10 @@ func headlessListPortFwds() (err error) {
 			continue
 		}
 		var permapping mapping
-		permapping.id = id
-		permapping.description = portmap.Description
+		permapping.Id = id
+		permapping.Description = portmap.Description
+		permapping.Agent = portmap.Agent.Tag
+		permapping.Reverse = portmap.Reverse
 		mappings = append(mappings, permapping)
 	}
 	data, err := json.Marshal(mappings)
@@ -57,15 +62,13 @@ func headlessListPortFwds() (err error) {
 
 // DeletePortFwdSession delete a port mapping session by ID
 func DeletePortFwdSession(sessionID string) {
-	var mutex = &sync.Mutex{}
-	mutex.Lock()
-	defer mutex.Unlock()
+	PortFwdsMutex.Lock()
+	defer PortFwdsMutex.Unlock()
 	for id, session := range PortFwds {
 		if id == sessionID {
 			err := SendCmd("!delete_portfwd "+id, session.Agent)
 			if err != nil {
-				CliPrintError("Tell agent %s to delete port mapping %s: %v", session.Agent.Tag, sessionID, err)
-				return
+				CliPrintWarning("Tell agent %s to delete port mapping %s: %v", session.Agent.Tag, sessionID, err)
 			}
 			session.Cancel()
 			delete(PortFwds, id)
@@ -84,13 +87,46 @@ func ListPortFwds() {
 
 	color.Cyan("Active port mappings\n")
 	color.Cyan("====================\n\n")
+
+	// build table
+	tdata := [][]string{}
+	tableString := &strings.Builder{}
+	table := tablewriter.NewWriter(tableString)
+	table.SetHeader([]string{"Local Port", "To", "Agent", "ID"})
+	table.SetBorder(true)
+	table.SetRowLine(true)
+	table.SetAutoWrapText(true)
+	table.SetAutoFormatHeaders(true)
+	table.SetReflowDuringAutoWrap(true)
+
+	// color
+	table.SetHeaderColor(tablewriter.Colors{tablewriter.Bold, tablewriter.FgHiMagentaColor},
+		tablewriter.Colors{tablewriter.Bold, tablewriter.FgHiCyanColor},
+		tablewriter.Colors{tablewriter.Bold, tablewriter.FgHiBlueColor},
+		tablewriter.Colors{tablewriter.Bold, tablewriter.FgHiYellowColor})
+
+	table.SetColumnColor(tablewriter.Colors{tablewriter.FgHiMagentaColor},
+		tablewriter.Colors{tablewriter.FgHiCyanColor},
+		tablewriter.Colors{tablewriter.FgBlueColor},
+		tablewriter.Colors{tablewriter.FgYellowColor})
 	for id, portmap := range PortFwds {
 		if portmap.Sh == nil {
 			portmap.Cancel()
 			continue
 		}
-		color.Green("%s (%s)\n", portmap.Description, id)
+		to := portmap.To + " (Agent) "
+		lport := portmap.Lport + " (CC) "
+		if portmap.Reverse {
+			to = portmap.To + " (CC) "
+			lport = portmap.Lport + " (Agent) "
+		}
+		tdata = append(tdata, []string{lport, to, SplitLongLine(portmap.Agent.Tag, 10), SplitLongLine(id, 10)})
 	}
+
+	// rendor table
+	table.AppendBulk(tdata)
+	table.Render()
+	fmt.Printf("\n\033[0m%s\n\n", tableString)
 }
 
 // InitReversedPortFwd send portfwd command to agent and set up a reverse port mapping
@@ -107,7 +143,11 @@ func (pf *PortFwdSession) InitReversedPortFwd() (err error) {
 	fwdID := uuid.New().String()
 	pf.Sh = nil
 	pf.Description = fmt.Sprintf("%s (Local) <- %s (Agent)", toAddr, listenPort)
+	pf.Reverse = true
+	pf.Agent = CurrentTarget
+	PortFwdsMutex.Lock()
 	PortFwds[fwdID] = pf
+	PortFwdsMutex.Unlock()
 
 	// tell agent to start this mapping
 	cmd := fmt.Sprintf("!port_fwd %s %s reverse", listenPort, fwdID)
@@ -134,25 +174,26 @@ func (pf *PortFwdSession) RunReversedPortFwd(sh *StreamHandler) (err error) {
 		_, _ = conn.Write([]byte("exit\n"))
 		conn.Close()
 		sh.H2x.Conn.Close()
-		CliPrintInfo("PortFwd conn handler (%s) finished", conn.RemoteAddr().String())
+		CliPrintDebug("PortFwd conn handler (%s) finished", conn.RemoteAddr().String())
 		sh.H2x.Cancel() // cancel this h2 connection
 	}
 
 	// remember the agent
 	pf.Agent = CurrentTarget
+	pf.Reverse = true
 
 	// io.Copy
 	go func() {
 		_, err = io.Copy(sh.H2x.Conn, conn)
 		if err != nil {
-			CliPrintWarning("conn -> h2: %v", err)
+			CliPrintDebug("RunReversedPortFwd: conn -> h2: %v", err)
 			return
 		}
 	}()
 	go func() {
 		_, err = io.Copy(conn, sh.H2x.Conn)
 		if err != nil {
-			CliPrintWarning("h2 -> conn: %v", err)
+			CliPrintDebug("RunReversedPortFwd: h2 -> conn: %v", err)
 			return
 		}
 	}()
@@ -200,7 +241,7 @@ func (pf *PortFwdSession) RunPortFwd() (err error) {
 			_, _ = conn.Write([]byte("exit"))
 			conn.Close()
 			sh.H2x.Conn.Close()
-			CliPrintInfo("PortFwd conn handler (%s) finished", conn.RemoteAddr().String())
+			CliPrintDebug("handlePerConn: %s finished", conn.RemoteAddr().String())
 			connCancel()
 		}
 
@@ -208,14 +249,14 @@ func (pf *PortFwdSession) RunPortFwd() (err error) {
 		go func() {
 			_, err = io.Copy(sh.H2x.Conn, conn)
 			if err != nil {
-				CliPrintWarning("conn -> h2: %v", err)
+				CliPrintDebug("handlePerConn: conn -> h2: %v", err)
 				return
 			}
 		}()
 		go func() {
 			_, err = io.Copy(conn, sh.H2x.Conn)
 			if err != nil {
-				CliPrintWarning("h2 -> conn: %v", err)
+				CliPrintDebug("handlePerConn: h2 -> conn: %v", err)
 				return
 			}
 		}()
@@ -235,8 +276,6 @@ func (pf *PortFwdSession) RunPortFwd() (err error) {
 	cancel := pf.Cancel
 	toAddr := pf.To
 	listenPort := pf.Lport
-
-	var mutex = &sync.Mutex{}
 
 	// remember the agent
 	pf.Agent = CurrentTarget
@@ -264,15 +303,15 @@ func (pf *PortFwdSession) RunPortFwd() (err error) {
 	// mark this session, save to PortFwds
 	pf.Sh = nil
 	pf.Description = fmt.Sprintf("%s (Local) -> %s (Agent)", listenPort, toAddr)
-	mutex.Lock()
+	PortFwdsMutex.Lock()
 	PortFwds[fwdID] = pf
-	mutex.Unlock()
+	PortFwdsMutex.Unlock()
 
 	cleanup := func() {
 		cancel()
 		ln.Close()
-		mutex.Lock()
-		defer mutex.Unlock()
+		PortFwdsMutex.Lock()
+		defer PortFwdsMutex.Unlock()
 		delete(PortFwds, fwdID)
 		CliPrintWarning("PortFwd session (%s: %s) has finished", fwdID, pf.Description)
 	}

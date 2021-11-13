@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jm33-m0/emp3r0r/core/lib/agent"
+	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
 )
 
@@ -35,14 +35,14 @@ func DownloadFile(url, path string) (err error) {
 }
 
 // SendCmd send command to agent
-func SendCmd(cmd string, a *agent.SystemInfo) error {
+func SendCmd(cmd string, a *emp3r0r_data.SystemInfo) error {
 	if a == nil {
 		return errors.New("SendCmd: No such agent")
 	}
 
-	var cmdData agent.MsgTunData
+	var cmdData emp3r0r_data.MsgTunData
 
-	cmdData.Payload = fmt.Sprintf("cmd%s%s", agent.OpSep, cmd)
+	cmdData.Payload = fmt.Sprintf("cmd%s%s", emp3r0r_data.OpSep, cmd)
 	cmdData.Tag = a.Tag
 
 	return Send2Agent(&cmdData, a)
@@ -121,6 +121,53 @@ func VimEdit(filepath string) (err error) {
 	return errors.New("don't know if vim has done editing")
 }
 
+// get available terminal emulator on current system
+func getTerminalEmulator() (res string) {
+	terms := []string{"gnome-terminal", "xfce4-terminal", "xterm"}
+	for _, term := range terms {
+		if util.IsCommandExist(term) {
+			res = term
+			break
+		}
+	}
+	return
+}
+
+// OpenInNewTerminalWindow run a command in new terminal emulator window
+func OpenInNewTerminalWindow(name, cmd string) error {
+	terminal := getTerminalEmulator()
+	if terminal == "" {
+		return fmt.Errorf("No available terminal emulator")
+	}
+
+	// works fine for gnome-terminal and xfce4-terminal
+	job := fmt.Sprintf("%s -t '%s' -e '%s || read'", terminal, name, cmd)
+
+	out, err := exec.Command("/bin/bash", "-c", job).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, out)
+	}
+
+	return nil
+}
+
+// TmuxNewWindow split tmux window, and run command in the new pane
+func TmuxNewWindow(name, cmd string) error {
+	if os.Getenv("TMUX") == "" ||
+		!util.IsCommandExist("tmux") {
+		return errors.New("You need to run emp3r0r under `tmux`")
+	}
+
+	tmuxCmd := fmt.Sprintf("tmux new-window -n %s '%s || read'", name, cmd)
+	job := exec.Command("/bin/sh", "-c", tmuxCmd)
+	out, err := job.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, out)
+	}
+
+	return nil
+}
+
 // TmuxSplit split tmux window, and run command in the new pane
 func TmuxSplit(hV, cmd string) error {
 	if os.Getenv("TMUX") == "" ||
@@ -130,7 +177,7 @@ func TmuxSplit(hV, cmd string) error {
 		return errors.New("You need to run emp3r0r under `tmux`, and make sure `less` is installed")
 	}
 
-	job := fmt.Sprintf("tmux split-window -%s %s", hV, cmd)
+	job := fmt.Sprintf("tmux split-window -%s '%s || read'", hV, cmd)
 
 	out, err := exec.Command("/bin/sh", "-c", job).CombinedOutput()
 	if err != nil {
@@ -140,10 +187,10 @@ func TmuxSplit(hV, cmd string) error {
 	return nil
 }
 
-// agentExists is agent already in target list?
-func agentExists(agent *agent.SystemInfo) bool {
+// IsAgentExist is agent already in target list?
+func IsAgentExist(t *emp3r0r_data.SystemInfo) bool {
 	for a := range Targets {
-		if a.Tag == agent.Tag {
+		if a.Tag == t.Tag {
 			return true
 		}
 	}

