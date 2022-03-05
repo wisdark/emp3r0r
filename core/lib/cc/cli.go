@@ -8,16 +8,19 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
-	"os"
 	"strconv"
 	"strings"
 
 	"github.com/bettercap/readline"
 	"github.com/fatih/color"
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
+	"github.com/olekukonko/tablewriter"
 )
 
-const PromptName = "emp3r0r"
+const (
+	PromptName = "emp3r0r"
+	ClearTerm  = "\033[2J"
+)
 
 var (
 	// CliCompleter holds all command completions
@@ -53,6 +56,9 @@ func CliMain() {
 			readline.PcItemDynamic(listDir())),
 
 		readline.PcItem("mkdir",
+			readline.PcItemDynamic(listDir())),
+
+		readline.PcItem("ls",
 			readline.PcItemDynamic(listDir())),
 
 		readline.PcItem("cp",
@@ -96,6 +102,7 @@ func CliMain() {
 			cmd == "delete_port_fwd" ||
 			cmd == "rm" ||
 			cmd == "mv" ||
+			cmd == "ls" ||
 			cmd == "cd" ||
 			cmd == HELP {
 			continue
@@ -132,6 +139,13 @@ func CliMain() {
 	defer EmpReadLine.Close()
 	log.SetOutput(EmpReadLine.Stderr())
 
+	err = TmuxInitWindows()
+	if err != nil {
+		log.Fatalf("TMUX: %v", err)
+	}
+
+	defer TmuxDeinitWindows()
+
 start:
 	SetDynamicPrompt()
 	for {
@@ -152,7 +166,8 @@ start:
 		case "commands":
 			CliListCmds(EmpReadLine.Stderr())
 		case "exit":
-			os.Exit(0)
+			// os.Exit(0)
+			return
 
 		// process other commands
 		default:
@@ -166,7 +181,8 @@ start:
 
 	// ask the user if they really want to leave
 	if CliYesNo("Are you sure you want to leave") {
-		os.Exit(0)
+		// os.Exit(0)
+		return
 	}
 
 	fmt.Printf("\n")
@@ -444,18 +460,30 @@ func CliPrettyPrint(header1, header2 string, map2write *map[string]string) {
 		}
 	}
 
-	cnt := 18
-	sep := strings.Repeat(" ", cnt)
-	color.Cyan("%s%s%s\n", header1, sep, header2)
+	// build table
+	tdata := [][]string{}
+	tableString := &strings.Builder{}
+	table := tablewriter.NewWriter(tableString)
+	table.SetHeader([]string{header1, header2})
+	table.SetBorder(true)
+	table.SetRowLine(true)
+	table.SetAutoWrapText(true)
 
-	color.Cyan("%s%s%s\n", strings.Repeat("=", len(header1)), sep, strings.Repeat("=", len(header2)))
-	fmt.Println("")
+	// color
+	table.SetHeaderColor(tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+		tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor})
 
+	table.SetColumnColor(tablewriter.Colors{tablewriter.FgHiBlueColor},
+		tablewriter.Colors{tablewriter.FgBlueColor})
+
+	// fill table
 	for c1, c2 := range *map2write {
-		cnt = len(header1) + 18 - len(c1) // NOTE cannot be too long or cnt can be negative
-		sep = strings.Repeat(" ", cnt)
-		color.Cyan("%s%s%s\n", c1, sep, c2)
+		tdata = append(tdata, []string{c1, c2})
 	}
+	table.AppendBulk(tdata)
+	table.Render()
+	out := tableString.String()
+	CliPrintInfo("\n%s", out)
 }
 
 // encoded logo of emp3r0r
@@ -553,7 +581,7 @@ func listOptions() func(string) []string {
 	}
 }
 
-// autocomplete items in current directory
+// remote ls autocomplete items in current directory
 func listDir() func(string) []string {
 	return func(line string) []string {
 		names := make([]string, 0)
@@ -565,6 +593,7 @@ func listDir() func(string) []string {
 }
 
 // Function constructor - constructs new function for listing given directory
+// local ls
 func listFiles(path string) func(string) []string {
 	return func(line string) []string {
 		names := make([]string, 0)

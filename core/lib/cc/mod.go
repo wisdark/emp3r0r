@@ -15,6 +15,11 @@ type Option struct {
 }
 
 var (
+	// ModuleDir stores custom modules
+	// cc binary is saved as `./core/build/cc`,
+	// and modules are stored in `./core/modules`
+	ModuleDir = "../modules/"
+
 	// CurrentMod selected module
 	CurrentMod = "<blank>"
 
@@ -25,14 +30,14 @@ var (
 	Options = make(map[string]*Option)
 
 	// ShellHelpInfo provide utilities like ps, kill, etc
+	// deprecated
 	ShellHelpInfo = map[string]string{
-		HELP:      "Display this help",
-		"upgrade": "A fully interactive reverse shell from HTTP2 tunnel, type `exit` to leave",
-		"#ps":     "List processes: `ps`",
-		"#kill":   "Kill process: `kill <PID>`",
-		"#net":    "Show network info",
-		"put":     "Put a file from CC to agent: `put <local file> <remote path>`",
-		"get":     "Get a file from agent: `get <remote file>`",
+		HELP:    "Display this help",
+		"#ps":   "List processes: `ps`",
+		"#kill": "Kill process: `kill <PID>`",
+		"#net":  "Show network info",
+		"put":   "Put a file from CC to agent: `put <local file> <remote path>`",
+		"get":   "Get a file from agent: `get <remote file>`",
 	}
 
 	// ModuleHelpers a map of module helpers
@@ -48,16 +53,20 @@ var (
 		emp3r0r_data.ModVACCINE:      moduleVaccine,
 		emp3r0r_data.ModINJECTOR:     moduleInjector,
 		emp3r0r_data.ModREVERSEPROXY: moduleReverseProxy,
+		emp3r0r_data.ModGDB:          moduleGDB,
+		emp3r0r_data.ModBettercap:    moduleBettercap,
 	}
 )
 
 // SetOption set an option to value, `set` command
 func SetOption(args []string) {
+	opt := args[0]
 	if len(args) < 2 {
+		// clear value
+		Options[opt].Val = ""
 		return
 	}
 
-	opt := args[0]
 	val := args[1:] // in case val contains spaces
 
 	if _, exist := Options[opt]; !exist {
@@ -109,6 +118,9 @@ func UpdateOptions(modName string) (exist bool) {
 			"cmd.exe", "powershell.exe",
 		}
 		shellOpt.Val = "bash"
+
+		argsOpt := addIfNotFound("args")
+		argsOpt.Val = ""
 		portOpt := addIfNotFound("port")
 		portOpt.Vals = []string{
 			emp3r0r_data.SSHDPort, "22222",
@@ -152,13 +164,18 @@ func UpdateOptions(modName string) (exist bool) {
 		pidOpt.Vals = []string{"0"}
 		pidOpt.Val = "0"
 		methodOpt := addIfNotFound("method")
-		methodOpt.Vals = []string{"gdb", "native", "python"}
-		methodOpt.Val = "native"
+		methodOpt.Vals = []string{"gdb_loader", "inject_shellcode", "inject_loader"}
+		methodOpt.Val = "inject_shellcode"
+
+	case modName == emp3r0r_data.ModBettercap:
+		argsOpt := addIfNotFound("args")
+		argsOpt.Vals = []string{"--"}
+		argsOpt.Val = "--"
 
 	case modName == emp3r0r_data.ModREVERSEPROXY:
-		pidOpt := addIfNotFound("addr")
-		pidOpt.Vals = []string{"127.0.0.1"}
-		pidOpt.Val = "<blank>"
+		addrOpt := addIfNotFound("addr")
+		addrOpt.Vals = []string{"127.0.0.1"}
+		addrOpt.Val = "<blank>"
 
 	case modName == emp3r0r_data.ModPERSISTENCE:
 		currentOpt = addIfNotFound("method")
@@ -170,6 +187,20 @@ func UpdateOptions(modName string) (exist bool) {
 		}
 		currentOpt.Vals = methods
 		currentOpt.Val = "all"
+
+	default:
+		// custom modules
+		for arg := range emp3r0r_data.ModuleHelp[modName] {
+			argOpt := addIfNotFound(arg)
+
+			// read default values
+			modConf, exist := ModuleConfigs[modName]
+			if !exist {
+				continue
+			}
+			val := modConf.Options[arg][0]
+			argOpt.Val = val
+		}
 	}
 
 	return

@@ -64,16 +64,15 @@ func moduleShell() {
 
 	// options
 	shell := Options["shell"].Val
+	args := Options["args"].Val
 	port := Options["port"].Val
 	if shell == "bash" {
 		port = emp3r0r_data.SSHDPort
-	} else if port == emp3r0r_data.SSHDPort {
-		CliPrintError("Port %s already has a bash shell at service, choose a different one", port)
-		return
+		SSHShellPort["bash"] = port
 	}
 
 	// run
-	err := SSHClient(shell, port)
+	err := SSHClient(shell, args, port, false)
 	if err != nil {
 		CliPrintError("moduleShell: %v", err)
 	}

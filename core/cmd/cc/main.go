@@ -1,3 +1,6 @@
+//go:build linux
+// +build linux
+
 package main
 
 import (
@@ -37,7 +40,7 @@ func readJSONConfig(filename string) (err error) {
 	var config Config
 	err = json.Unmarshal(jsonData, &config)
 	if err != nil {
-		return fmt.Errorf("failed to decrypt JSON config: %v", err)
+		return fmt.Errorf("failed to parse JSON config: %v", err)
 	}
 
 	// set up runtime vars
@@ -103,7 +106,7 @@ func main() {
 			if err != nil {
 				log.Fatal(err)
 			}
-			err = cdn2proxy.StartServer(*cdnproxy, "127.0.0.1:"+emp3r0r_data.CCPort, logFile)
+			err = cdn2proxy.StartServer(*cdnproxy, "127.0.0.1:"+emp3r0r_data.CCPort, "ws", logFile)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -119,5 +122,6 @@ func main() {
 	if *apiserver {
 		go cc.APIMain()
 	}
+	cc.InitModules()
 	cc.CliMain()
 }
