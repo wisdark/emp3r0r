@@ -23,7 +23,7 @@ var CmdResultsMutex = &sync.Mutex{}
 
 // processAgentData deal with data from agent side
 func processAgentData(data *emp3r0r_data.MsgTunData) {
-	payloadSplit := strings.Split(data.Payload, emp3r0r_data.OpSep)
+	payloadSplit := strings.Split(data.Payload, emp3r0r_data.MagicString)
 	op := payloadSplit[0]
 
 	target := GetTargetFromTag(data.Tag)
@@ -40,15 +40,19 @@ func processAgentData(data *emp3r0r_data.MsgTunData) {
 
 	// cmd output from agent
 	cmd := payloadSplit[1]
-	cmd_slice := strings.Fields(cmd)
+	cmd_slice := util.ParseCmd(cmd)
 	out := strings.Join(payloadSplit[2:len(payloadSplit)-1], " ")
 	// outLines := strings.Split(out, "\n")
 
 	// time spent on this cmd
 	cmd_id := payloadSplit[len(payloadSplit)-1]
-	start_time, err := time.Parse("2006-01-02 15:04:05.999999999 -0700 MST", CmdTime[cmd+cmd_id])
+	// cache this cmd response
+	CmdResultsMutex.Lock()
+	CmdResults[cmd_id] = out
+	CmdResultsMutex.Unlock()
+	start_time, err := time.Parse("2006-01-02 15:04:05.999999999 -0700 MST", CmdTime[cmd_id])
 	if err != nil {
-		CliPrintWarning("Parsing timestamp %s: %v", CmdTime[cmd+cmd_id], err)
+		CliPrintWarning("Parsing timestamp '%s': %v", CmdTime[cmd_id], err)
 	} else {
 		time_spent := time.Since(start_time)
 		CliPrintInfo("Command %s took %s", strconv.Quote(cmd), time_spent)
@@ -101,6 +105,7 @@ func processAgentData(data *emp3r0r_data.MsgTunData) {
 		table.SetBorder(true)
 		table.SetRowLine(true)
 		table.SetAutoWrapText(true)
+		table.SetColWidth(20)
 
 		// color
 		table.SetHeaderColor(tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
@@ -115,7 +120,7 @@ func processAgentData(data *emp3r0r_data.MsgTunData) {
 
 		// fill table
 		for _, p := range procs {
-			pname := SplitLongLine(p.Name, 20)
+			pname := util.SplitLongLine(p.Name, 20)
 			tdata = append(tdata, []string{pname, strconv.Itoa(p.PID), strconv.Itoa(p.PPID), p.Token})
 		}
 		table.AppendBulk(tdata)
@@ -124,7 +129,7 @@ func processAgentData(data *emp3r0r_data.MsgTunData) {
 
 		// resize pane since table might mess up
 		x := len(strings.Split(out, "\n")[0])
-		AgentOutputPane.ResizePane("x", x)
+		FitPanes(x)
 
 		// ls command
 	case "ls":
@@ -144,6 +149,8 @@ func processAgentData(data *emp3r0r_data.MsgTunData) {
 		table.SetHeader([]string{"Name", "Type", "Size", "Time", "Permission"})
 		table.SetRowLine(true)
 		table.SetBorder(true)
+		table.SetColWidth(20)
+		table.SetAutoWrapText(true)
 
 		// color
 		table.SetHeaderColor(tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
@@ -160,7 +167,7 @@ func processAgentData(data *emp3r0r_data.MsgTunData) {
 
 		// fill table
 		for _, d := range dents {
-			dname := SplitLongLine(d.Name, 20)
+			dname := util.SplitLongLine(d.Name, 20)
 			tdata = append(tdata, []string{dname, d.Ftype, d.Size, d.Date, d.Permission})
 			if len(cmd_slice) == 1 {
 				if d.Ftype == "file" {
@@ -178,7 +185,7 @@ func processAgentData(data *emp3r0r_data.MsgTunData) {
 
 		// resize pane since table might mess up
 		x := len(strings.Split(out, "\n")[0])
-		AgentOutputPane.ResizePane("x", x)
+		FitPanes(x)
 	}
 
 	// Command output
@@ -188,8 +195,4 @@ func processAgentData(data *emp3r0r_data.MsgTunData) {
 		color.HiMagentaString(cmd),
 		color.HiWhiteString(out))
 
-	// cache this cmd response
-	CmdResultsMutex.Lock()
-	CmdResults[cmd_id] = out
-	CmdResultsMutex.Unlock()
 }

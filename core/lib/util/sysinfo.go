@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/user"
+	"runtime"
 	"strings"
 
 	"github.com/jaypipes/ghw"
@@ -74,19 +75,6 @@ func GetUsername() string {
 	return u.Username
 }
 
-func GetKernelVersion() (uname string) {
-	release, err := ioutil.ReadFile("/proc/sys/kernel/osrelease")
-	if err != nil {
-		release = []byte("unknown_release")
-	}
-	version, err := ioutil.ReadFile("/proc/sys/kernel/version")
-	if err != nil {
-		version = []byte("unknown_version")
-	}
-
-	return fmt.Sprintf("%s Linux %s", release, version)
-}
-
 // Golang code to get MAC address for purposes of generating a unique id. Returns a uint64.
 // Skips virtual MAC addresses (Locally Administered Addresses).
 func macUint64() uint64 {
@@ -128,14 +116,14 @@ func genShortID() (id string) {
 // GetHostID unique identifier of the host
 func GetHostID(fallbackUUID string) (id string) {
 	shortID := genShortID()
-	id = fmt.Sprintf("unknown_%s-agent", shortID)
+	id = fmt.Sprintf("unknown_hostname_%s-agent", shortID)
 	name, err := os.Hostname()
 	if err != nil {
 		log.Printf("GetHostID: %v", err)
 		return
 	}
-	name = fmt.Sprintf("%s\\%s", name, GetUsername())
-	id = fmt.Sprintf("%s_%s-agent-%s", name, shortID, fallbackUUID)
+	name = fmt.Sprintf("%s\\%s", name, GetUsername()) // hostname\\username
+	id = fmt.Sprintf("%s_%s-agent", name, shortID)
 	productInfo, err := ghw.Product()
 	if err != nil {
 		log.Printf("GetHostID: %v", err)
@@ -144,7 +132,38 @@ func GetHostID(fallbackUUID string) (id string) {
 
 	if productInfo.UUID != "unknown" {
 		id = fmt.Sprintf("%s_%s-agent-%s", name, shortID, productInfo.UUID)
+	} else {
+		id = fmt.Sprintf("%s_%s-agent-%s", name, shortID, fallbackUUID)
 	}
+	return
+}
+
+// ScanPATH scan $PATH and return a list of executables, for autocomplete
+func ScanPATH() (exes []string) {
+	path_str := os.Getenv("PATH")
+	sep := ":"
+	if runtime.GOOS == "windows" {
+		sep = ";"
+	}
+
+	paths := strings.Split(path_str, sep)
+	if len(paths) < 1 {
+		exes = []string{""}
+		log.Printf("Empty PATH: %s", path_str)
+		return
+	}
+
+	// scan paths
+	for _, path := range paths {
+		files, err := ioutil.ReadDir(path)
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			exes = append(exes, f.Name())
+		}
+	}
+	log.Printf("Found %d executables from PATH (%s)", len(exes), path_str)
 	return
 }
 

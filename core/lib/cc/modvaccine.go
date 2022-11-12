@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
 )
 
@@ -16,7 +17,7 @@ func moduleVaccine() {
 			CliPrintError("CreateVaccineArchive: %v", err)
 			return
 		}
-		err = SendCmd("!utils", "", CurrentTarget)
+		err = SendCmd(emp3r0r_data.C2CmdUtils, "", CurrentTarget)
 		if err != nil {
 			CliPrintError("SendCmd failed: %v", err)
 		}
@@ -24,13 +25,15 @@ func moduleVaccine() {
 }
 
 func CreateVaccineArchive() (err error) {
-	CliPrintInfo("Creating %s for module vaccine, allow up to 10 seconds...", UtilsArchive)
-	pwd, _ := os.Getwd()
-	err = os.Chdir(ModuleDir + "/vaccine")
+	CliPrintInfo("Creating archive (%s) for module vaccine...", UtilsArchive)
+	err = os.Chdir(EmpDataDir + "/modules/vaccine") // vaccine is always stored under EmpDataDir
 	if err != nil {
 		return fmt.Errorf("Entering vaccine dir: %v", err)
 	}
-	defer os.Chdir(pwd)
+	defer func() {
+		CliPrintInfo("Created %.2fMB archive (%s) for module vaccine", float64(util.FileSize(UtilsArchive))/1024/1024, UtilsArchive)
+		os.Chdir(EmpWorkSpace)
+	}()
 	err = util.TarBz2(".", UtilsArchive)
 	if err != nil {
 		return fmt.Errorf("Creating vaccine archive: %v", err)

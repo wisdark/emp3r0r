@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,9 +37,9 @@ func DownloadFile(url, path string) (err error) {
 }
 
 // SendCmd send command to agent
-func SendCmd(cmd, cmd_id string, a *emp3r0r_data.SystemInfo) error {
+func SendCmd(cmd, cmd_id string, a *emp3r0r_data.AgentSystemInfo) error {
 	if a == nil {
-		return errors.New("SendCmd: No such agent")
+		return fmt.Errorf("SendCmd: agent '%s' not found", a.Tag)
 	}
 
 	var cmdData emp3r0r_data.MsgTunData
@@ -48,17 +49,48 @@ func SendCmd(cmd, cmd_id string, a *emp3r0r_data.SystemInfo) error {
 		cmd_id = uuid.New().String()
 	}
 	cmdData.Payload = fmt.Sprintf("cmd%s%s%s%s",
-		emp3r0r_data.OpSep, cmd,
-		emp3r0r_data.OpSep, cmd_id)
+		emp3r0r_data.MagicString, cmd,
+		emp3r0r_data.MagicString, cmd_id)
 	cmdData.Tag = a.Tag
 
 	// timestamp
 	cmdData.Time = time.Now().Format("2006-01-02 15:04:05.999999999 -0700 MST")
 	CmdTimeMutex.Lock()
-	CmdTime[cmd+cmd_id] = cmdData.Time
+	CmdTime[cmd_id] = cmdData.Time
 	CmdTimeMutex.Unlock()
 
+	if !strings.HasPrefix(cmd, "!") {
+		go wait_for_cmd_response(cmd, cmd_id, a)
+	}
+
 	return Send2Agent(&cmdData, a)
+}
+
+func wait_for_cmd_response(cmd, cmd_id string, agent *emp3r0r_data.AgentSystemInfo) {
+	ctrl, exists := Targets[agent]
+	if !exists || agent == nil {
+		CliPrintWarning("SendCmd: agent '%s' not connected", agent.Tag)
+		return
+	}
+	now := time.Now()
+	for ctrl.Ctx.Err() == nil {
+		if _, exists := CmdResults[cmd_id]; exists {
+			CmdResultsMutex.Lock()
+			delete(CmdResults, cmd_id)
+			CmdResultsMutex.Unlock()
+			return
+		}
+		wait_time := time.Since(now)
+		if wait_time > 1*time.Minute {
+			CliPrintError("Executing %s on %s: unresponsive for %v, removing agent from list",
+				strconv.Quote(cmd),
+				strconv.Quote(agent.Name),
+				wait_time)
+			ctrl.Cancel()
+			return
+		}
+		util.TakeABlink()
+	}
 }
 
 // SendCmdToCurrentTarget send a command to currently selected agent
@@ -164,8 +196,19 @@ func OpenInNewTerminalWindow(name, cmd string) error {
 	return nil
 }
 
+// IsAgentExistByTag is agent already in target list?
+func IsAgentExistByTag(tag string) bool {
+	for a := range Targets {
+		if a.Tag == tag {
+			return true
+		}
+	}
+
+	return false
+}
+
 // IsAgentExist is agent already in target list?
-func IsAgentExist(t *emp3r0r_data.SystemInfo) bool {
+func IsAgentExist(t *emp3r0r_data.AgentSystemInfo) bool {
 	for a := range Targets {
 		if a.Tag == t.Tag {
 			return true

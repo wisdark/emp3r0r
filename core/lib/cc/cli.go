@@ -11,9 +11,13 @@ import (
 	"strconv"
 	"strings"
 
+	cowsay "github.com/Code-Hex/Neo-cowsay/v2"
 	"github.com/bettercap/readline"
 	"github.com/fatih/color"
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
+	"github.com/jm33-m0/emp3r0r/core/lib/ss"
+	"github.com/jm33-m0/emp3r0r/core/lib/tun"
+	"github.com/jm33-m0/emp3r0r/core/lib/util"
 	"github.com/olekukonko/tablewriter"
 )
 
@@ -28,6 +32,9 @@ var (
 
 	// CmdCompls completions for readline
 	CmdCompls []readline.PrefixCompleterInterface
+
+	// InitCmdCompls initial completions for readline, so we can roll back
+	InitCmdCompls []readline.PrefixCompleterInterface
 
 	// EmpReadLine : our commandline
 	EmpReadLine *readline.Instance
@@ -50,31 +57,31 @@ func CliMain() {
 			readline.PcItemDynamic(listMods())),
 
 		readline.PcItem("rm",
-			readline.PcItemDynamic(listDir())),
+			readline.PcItemDynamic(listRemoteDir())),
 
 		readline.PcItem("mv",
-			readline.PcItemDynamic(listDir())),
+			readline.PcItemDynamic(listRemoteDir())),
 
 		readline.PcItem("mkdir",
-			readline.PcItemDynamic(listDir())),
+			readline.PcItemDynamic(listRemoteDir())),
 
 		readline.PcItem("ls",
-			readline.PcItemDynamic(listDir())),
+			readline.PcItemDynamic(listRemoteDir())),
 
 		readline.PcItem("cp",
-			readline.PcItemDynamic(listDir())),
+			readline.PcItemDynamic(listRemoteDir())),
 
 		readline.PcItem("cd",
-			readline.PcItemDynamic(listDir())),
+			readline.PcItemDynamic(listRemoteDir())),
 
 		readline.PcItem("get",
-			readline.PcItemDynamic(listDir())),
+			readline.PcItemDynamic(listRemoteDir())),
 
 		readline.PcItem("vim",
-			readline.PcItemDynamic(listDir())),
+			readline.PcItemDynamic(listRemoteDir())),
 
 		readline.PcItem("put",
-			readline.PcItemDynamic(listFiles("./"))),
+			readline.PcItemDynamic(listLocalFiles("./"))),
 
 		readline.PcItem(HELP,
 			readline.PcItemDynamic(listMods())),
@@ -89,7 +96,7 @@ func CliMain() {
 			readline.PcItemDynamic(listPortMappings())),
 	}
 
-	for cmd := range Commands {
+	for cmd := range CommandHelp {
 		if cmd == "set" ||
 			cmd == "use" ||
 			cmd == "get" ||
@@ -109,8 +116,9 @@ func CliMain() {
 		}
 		CmdCompls = append(CmdCompls, readline.PcItem(cmd))
 	}
-	CmdCompls = append(CmdCompls, readline.PcItemDynamic(listFiles("./")))
 	CliCompleter.SetChildren(CmdCompls)
+	// remember initial CmdCompls
+	InitCmdCompls = CmdCompls
 
 	// prompt setup
 	filterInput := func(r rune) (rune, bool) {
@@ -125,7 +133,7 @@ func CliMain() {
 	// set up readline instance
 	EmpReadLine, err = readline.NewEx(&readline.Config{
 		Prompt:          EmpPrompt,
-		HistoryFile:     "./emp3r0r.history",
+		HistoryFile:     "./.emp3r0r.history",
 		AutoComplete:    CliCompleter,
 		InterruptPrompt: "^C\nExiting...\n",
 		EOFPrompt:       "^D\nExiting...\n",
@@ -141,7 +149,7 @@ func CliMain() {
 
 	err = TmuxInitWindows()
 	if err != nil {
-		log.Fatalf("TMUX: %v", err)
+		log.Fatalf("Fatal TMUX error: %v, please run `tmux kill-server` and re-run emp3r0r", err)
 	}
 
 	defer TmuxDeinitWindows()
@@ -166,7 +174,10 @@ start:
 		case "commands":
 			CliListCmds(EmpReadLine.Stderr())
 		case "exit":
-			// os.Exit(0)
+			return
+		case "quit":
+			return
+		case "q":
 			return
 
 		// process other commands
@@ -279,9 +290,10 @@ func CliPrintWarning(format string, a ...interface{}) {
 	}
 }
 
-// CliMsg print log in cyan, regardless of debug level
+// CliMsg print log in bold cyan, regardless of debug level
 func CliMsg(format string, a ...interface{}) {
-	log.Println(color.CyanString(format, a...))
+	msg_color := color.New(color.Bold, color.FgCyan)
+	log.Println(msg_color.Sprintf(format, a...))
 	if IsAPIEnabled {
 		// send to socket
 		var resp APIResponse
@@ -347,6 +359,29 @@ func CliPrintSuccess(format string, a ...interface{}) {
 	}
 }
 
+// CliFatalError print log in red, and exit
+func CliFatalError(format string, a ...interface{}) {
+	errorColor := color.New(color.Bold, color.FgHiRed)
+	log.Fatal(errorColor.Sprintf(format, a...))
+	if IsAPIEnabled {
+		// send to socket
+		var resp APIResponse
+		msg := GetDateTime() + " ERROR: " + fmt.Sprintf(format, a...)
+		resp.MsgData = []byte(msg)
+		resp.Alert = true
+		resp.MsgType = LOG
+		data, err := json.Marshal(resp)
+		if err != nil {
+			log.Printf("CliPrintError: %v", err)
+			return
+		}
+		_, err = APIConn.Write([]byte(data))
+		if err != nil {
+			log.Printf("CliPrintError: %v", err)
+		}
+	}
+}
+
 // CliPrintError print log in red
 func CliPrintError(format string, a ...interface{}) {
 	errorColor := color.New(color.Bold, color.FgHiRed)
@@ -370,6 +405,37 @@ func CliPrintError(format string, a ...interface{}) {
 	}
 }
 
+// CliAsk prompt for an answer from user
+func CliAsk(prompt string) (answer string) {
+	// if there's no way to show prompt
+	if IsAPIEnabled {
+		return "No terminal available"
+	}
+
+	EmpReadLine.SetPrompt(color.HiMagentaString(prompt))
+	EmpReadLine.Config.EOFPrompt = ""
+	EmpReadLine.Config.InterruptPrompt = ""
+
+	defer EmpReadLine.SetPrompt(EmpPrompt)
+
+	var err error
+	for {
+		answer, err = EmpReadLine.Readline()
+		if err != nil {
+			if err == readline.ErrInterrupt || err == io.EOF {
+				continue
+			}
+			CliPrintError("CliAsk: %v", err)
+		}
+		answer = strings.TrimSpace(answer)
+		if answer != "" {
+			break
+		}
+	}
+
+	return
+}
+
 // CliYesNo prompt for a y/n answer from user
 func CliYesNo(prompt string) bool {
 	// always return true if there's no way to show prompt
@@ -377,7 +443,7 @@ func CliYesNo(prompt string) bool {
 		return true
 	}
 
-	EmpReadLine.SetPrompt(color.CyanString(prompt + "? [y/N] "))
+	EmpReadLine.SetPrompt(color.HiMagentaString(prompt + "? [y/N] "))
 	EmpReadLine.Config.EOFPrompt = ""
 	EmpReadLine.Config.InterruptPrompt = ""
 
@@ -434,7 +500,26 @@ func CliBanner() error {
 	}
 
 	color.Cyan(string(data))
-	color.Cyan("version: %s\n\n", emp3r0r_data.Version)
+	cow, err := cowsay.New(
+		cowsay.BallonWidth(40),
+		cowsay.Random(),
+	)
+	if err != nil {
+		log.Fatalf("CowSay: %v", err)
+	}
+	// C2 names
+	c2_names := tun.NamesInCert(ServerCrtFile)
+	if len(c2_names) <= 0 {
+		CliFatalError("C2 has no names?")
+	}
+	name_list := strings.Join(c2_names, ", ")
+
+	say, err := cow.Say(fmt.Sprintf("welcome! you are using version %s,\nC2 listening on *:%s,\nC2 names: %s",
+		emp3r0r_data.Version, RuntimeConfig.CCPort, name_list))
+	if err != nil {
+		log.Fatalf("CowSay: %v", err)
+	}
+	color.Cyan("%s\n\n", say)
 	return nil
 }
 
@@ -468,6 +553,7 @@ func CliPrettyPrint(header1, header2 string, map2write *map[string]string) {
 	table.SetBorder(true)
 	table.SetRowLine(true)
 	table.SetAutoWrapText(true)
+	table.SetColWidth(20)
 
 	// color
 	table.SetHeaderColor(tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
@@ -478,11 +564,13 @@ func CliPrettyPrint(header1, header2 string, map2write *map[string]string) {
 
 	// fill table
 	for c1, c2 := range *map2write {
-		tdata = append(tdata, []string{c1, c2})
+		tdata = append(tdata,
+			[]string{util.SplitLongLine(c1, 20), util.SplitLongLine(c2, 20)})
 	}
 	table.AppendBulk(tdata)
 	table.Render()
 	out := tableString.String()
+	AdaptiveTable(out)
 	CliPrintInfo("\n%s", out)
 }
 
@@ -500,8 +588,8 @@ ICAgICDilpPilpMg4paT4paTICAg4paT4paTIOKWk+KWk+KWk+KWkyAg4paT4paTIOKWk+KWkyAg
 IOKWk+KWkwrilojilojilojilojilojilojilogg4paI4paIICAgICAg4paI4paIIOKWiOKWiCAg
 ICAgIOKWiOKWiOKWiOKWiOKWiOKWiCAg4paI4paIICAg4paI4paIICDilojilojilojilojiloji
 loggIOKWiOKWiCAgIOKWiOKWiAoKCmEgbGludXggcG9zdC1leHBsb2l0YXRpb24gZnJhbWV3b3Jr
-IG1hZGUgYnkgbGludXggdXNlcgoKYnkgam0zMy1uZwoKaHR0cHM6Ly9naXRodWIuY29tL2ptMzMt
-bTAvZW1wM3IwcgoKCg==
+IG1hZGUgYnkgbGludXggdXNlcgoKaHR0cHM6Ly9naXRodWIuY29tL2ptMzMtbTAvZW1wM3IwcgoK
+Cg==
 `
 
 // autocomplete module options
@@ -581,11 +669,44 @@ func listOptions() func(string) []string {
 	}
 }
 
+// remote autocomplete items in $PATH
+func listAgentExes(agent *emp3r0r_data.AgentSystemInfo) []string {
+	CliPrintDebug("listing exes in PATH")
+	exes := make([]string, 0)
+	if agent == nil {
+		CliPrintDebug("No valid target selected so no autocompletion for exes")
+		return exes
+	}
+	for _, exe := range agent.Exes {
+		exe = strings.ReplaceAll(exe, "\t", "\\t")
+		exe = strings.ReplaceAll(exe, " ", "\\ ")
+		exes = append(exes, exe)
+	}
+	CliPrintDebug("Exes found on agent '%s':\n%v",
+		agent.Tag, exes)
+	return exes
+}
+
+// when a target is selected, update CmdCompls with PATH items
+func updateAgentExes(agent *emp3r0r_data.AgentSystemInfo) {
+	exes := listAgentExes(agent)
+	temp_CmdCompls := InitCmdCompls
+
+	for _, exe := range exes {
+		temp_CmdCompls = append(temp_CmdCompls, readline.PcItem(exe))
+	}
+
+	CmdCompls = temp_CmdCompls
+	CliCompleter.SetChildren(CmdCompls)
+}
+
 // remote ls autocomplete items in current directory
-func listDir() func(string) []string {
+func listRemoteDir() func(string) []string {
 	return func(line string) []string {
 		names := make([]string, 0)
 		for _, name := range LsDir {
+			name = strings.ReplaceAll(name, "\t", "\\t")
+			name = strings.ReplaceAll(name, " ", "\\ ")
 			names = append(names, name)
 		}
 		return names
@@ -594,13 +715,45 @@ func listDir() func(string) []string {
 
 // Function constructor - constructs new function for listing given directory
 // local ls
-func listFiles(path string) func(string) []string {
+func listLocalFiles(path string) func(string) []string {
 	return func(line string) []string {
 		names := make([]string, 0)
 		files, _ := ioutil.ReadDir(path)
 		for _, f := range files {
-			names = append(names, f.Name())
+			name := strings.ReplaceAll(f.Name(), "\t", "\\t")
+			name = strings.ReplaceAll(name, " ", "\\ ")
+			names = append(names, name)
 		}
 		return names
+	}
+}
+
+// automatically resize CommandPane according to table width
+func AdaptiveTable(tableString string) {
+	TmuxUpdatePanes()
+	row_len := len(strings.Split(tableString, "\n")[0])
+	if CommandPane.Width < row_len {
+		CliPrintDebug("Command Pane %d vs %d table width, resizing", CommandPane.Width, row_len)
+		CommandPane.ResizePane("x", row_len)
+	}
+}
+
+func setDebugLevel(cmd string) {
+	cmdSplit := strings.Fields(cmd)
+	if len(cmdSplit) != 2 {
+		CliPrintError("debug <0, 1, 2, 3>")
+		return
+	}
+	level, e := strconv.Atoi(cmdSplit[1])
+	if e != nil {
+		CliPrintError("Invalid debug level: %v", err)
+		return
+	}
+	DebugLevel = level
+	if DebugLevel > 2 {
+		log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lmsgprefix)
+		ss.ServerConfig.Verbose = true
+	} else {
+		log.SetFlags(log.Ldate | log.Ltime | log.LstdFlags)
 	}
 }

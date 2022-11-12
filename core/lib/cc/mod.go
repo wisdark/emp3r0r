@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
+	"github.com/lithammer/fuzzysearch/fuzzy"
 )
 
 // Option all necessary info of an option
@@ -15,16 +16,14 @@ type Option struct {
 }
 
 var (
-	// ModuleDir stores custom modules
-	// cc binary is saved as `./core/build/cc`,
-	// and modules are stored in `./core/modules`
-	ModuleDir = "../modules/"
+	// ModuleDir stores modules
+	ModuleDirs []string
 
 	// CurrentMod selected module
 	CurrentMod = "<blank>"
 
 	// CurrentTarget selected target
-	CurrentTarget *emp3r0r_data.SystemInfo
+	CurrentTarget *emp3r0r_data.AgentSystemInfo
 
 	// Options currently available options for `set`
 	Options = make(map[string]*Option)
@@ -54,7 +53,6 @@ var (
 		emp3r0r_data.ModINJECTOR:     moduleInjector,
 		emp3r0r_data.ModREVERSEPROXY: moduleReverseProxy,
 		emp3r0r_data.ModGDB:          moduleGDB,
-		emp3r0r_data.ModBettercap:    moduleBettercap,
 	}
 )
 
@@ -123,9 +121,9 @@ func UpdateOptions(modName string) (exist bool) {
 		argsOpt.Val = ""
 		portOpt := addIfNotFound("port")
 		portOpt.Vals = []string{
-			emp3r0r_data.SSHDPort, "22222",
+			RuntimeConfig.SSHDPort, "22222",
 		}
-		portOpt.Val = emp3r0r_data.SSHDPort
+		portOpt.Val = RuntimeConfig.SSHDPort
 
 	case modName == emp3r0r_data.ModPORT_FWD:
 		// rport
@@ -167,11 +165,6 @@ func UpdateOptions(modName string) (exist bool) {
 		methodOpt.Vals = []string{"gdb_loader", "inject_shellcode", "inject_loader"}
 		methodOpt.Val = "inject_shellcode"
 
-	case modName == emp3r0r_data.ModBettercap:
-		argsOpt := addIfNotFound("args")
-		argsOpt.Vals = []string{"--"}
-		argsOpt.Val = "--"
-
 	case modName == emp3r0r_data.ModREVERSEPROXY:
 		addrOpt := addIfNotFound("addr")
 		addrOpt.Vals = []string{"127.0.0.1"}
@@ -190,16 +183,11 @@ func UpdateOptions(modName string) (exist bool) {
 
 	default:
 		// custom modules
-		for arg := range emp3r0r_data.ModuleHelp[modName] {
-			argOpt := addIfNotFound(arg)
+		modconfig := ModuleConfigs[modName]
+		for opt, val_help := range modconfig.Options {
+			argOpt := addIfNotFound(opt)
 
-			// read default values
-			modConf, exist := ModuleConfigs[modName]
-			if !exist {
-				continue
-			}
-			val := modConf.Options[arg][0]
-			argOpt.Val = val
+			argOpt.Val = val_help[0]
 		}
 	}
 
@@ -234,7 +222,7 @@ func ModuleRun() {
 }
 
 // SelectCurrentTarget check if current target is set and alive
-func SelectCurrentTarget() (target *emp3r0r_data.SystemInfo) {
+func SelectCurrentTarget() (target *emp3r0r_data.AgentSystemInfo) {
 	// find target
 	target = CurrentTarget
 	if target == nil {
@@ -254,4 +242,16 @@ func SelectCurrentTarget() (target *emp3r0r_data.SystemInfo) {
 	}
 
 	return
+}
+
+// search modules, powered by fuzzysearch
+func ModuleSearch(cmd string) {
+	cmdSplit := strings.Fields(cmd)
+	if len(cmdSplit) < 2 {
+		CliPrintError("search <module keywords>")
+		return
+	}
+	query := strings.Join(cmdSplit[1:], " ")
+	result := fuzzy.Find(query, ModuleNames)
+	CliPrintInfo("\n%s\n", strings.Join(result, "\n"))
 }

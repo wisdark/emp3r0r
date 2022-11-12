@@ -34,14 +34,10 @@ func shellHelper(cmdSlice []string) (out string) {
 	case "#net":
 		out = shellNet()
 	case "#get":
-		if len(args) < 3 {
-			out = fmt.Sprintf("Invalid request %v", cmdSlice)
-			return
-		}
 		filepath := args[0]
 		offset, err := strconv.ParseInt(args[1], 10, 64)
 		if err != nil {
-			out = fmt.Sprintf("Invalid offset %s", args[1])
+			out = fmt.Sprintf("Invalid offset: %v", err)
 			return
 		}
 		token := args[2]
@@ -61,8 +57,8 @@ func shellHelper(cmdSlice []string) (out string) {
 
 func shellNet() (out string) {
 	ipa := tun.IPa()
-	ipneigh := IPNeigh()
-	ipr := IPr()
+	ipneigh := tun.IPNeigh()
+	ipr := tun.IPr()
 
 	out = fmt.Sprintf("[*] ip addr:\n    %s"+
 		"\n\n[*] ip route:\n    %s"+

@@ -10,15 +10,12 @@ var RShellStatus = make(map[string]error)
 // moduleCmd exec cmd on target
 func moduleCmd() {
 	// send command
-	execOnTarget := func(target *emp3r0r_data.SystemInfo) {
+	execOnTarget := func(target *emp3r0r_data.AgentSystemInfo) {
 		if Targets[target].Conn == nil {
 			CliPrintError("moduleCmd: agent %s is not connected", target.Tag)
 			return
 		}
-		var data emp3r0r_data.MsgTunData
-		data.Payload = "cmd" + emp3r0r_data.OpSep + Options["cmd_to_exec"].Val
-		data.Tag = target.Tag
-		err := Send2Agent(&data, target)
+		err := SendCmd(Options["cmd_to_exec"].Val, "", target)
 		if err != nil {
 			CliPrintError("moduleCmd: %v", err)
 		}
@@ -28,8 +25,8 @@ func moduleCmd() {
 	target := CurrentTarget
 	if target == nil {
 		CliPrintWarning("emp3r0r will execute `%s` on all targets this time", Options["cmd_to_exec"].Val)
-		for target := range Targets {
-			execOnTarget(target)
+		for per_target := range Targets {
+			execOnTarget(per_target)
 		}
 		return
 	}
@@ -67,7 +64,7 @@ func moduleShell() {
 	args := Options["args"].Val
 	port := Options["port"].Val
 	if shell == "bash" {
-		port = emp3r0r_data.SSHDPort
+		port = RuntimeConfig.SSHDPort
 		SSHShellPort["bash"] = port
 	}
 

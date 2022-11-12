@@ -3,18 +3,13 @@ package util
 import (
 	"bufio"
 	"context"
-	crypto_rand "crypto/rand"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
-	"math/rand"
-	mathRand "math/rand"
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/mholt/archiver/v4"
 )
@@ -144,42 +139,11 @@ func Copy(src, dst string) error {
 	return ioutil.WriteFile(dst, in, 0755)
 }
 
-// RandInt random int between given interval
-func RandInt(min, max int) int {
-	// if we get nonsense values
-	// give them random int anyway
-	if min > max ||
-		min < 0 ||
-		max < 0 {
-		min = RandInt(0, 100)
-		max = min + RandInt(0, 100)
-	}
-
-	var b [8]byte
-	_, err := crypto_rand.Read(b[:])
-	if err != nil {
-		log.Println("cannot seed math/rand package with cryptographically secure random number generator")
-		log.Println("falling back to math/rand with time seed")
-		return rand.New(rand.NewSource(time.Now().UnixNano())).Intn(max-min) + min
-	}
-	rand.Seed(int64(binary.LittleEndian.Uint64(b[:])))
-	return min + rand.Intn(max-min)
-}
-
-// RandStr random string
-func RandStr(n int) string {
-	var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-	mathRand.Seed(time.Now().Unix())
-	b := make([]rune, n)
-	for i := range b {
-		b[i] = letters[mathRand.Intn(len(letters))]
-	}
-	return string(b)
-}
-
 // FileBaseName /path/to/foo -> foo
 func FileBaseName(filepath string) (filename string) {
 	// we only need the filename
+	filepath = strings.ReplaceAll(filepath, "\\", "/") // DOS path symbol
+	filepath = strings.ReplaceAll(filepath, "..", "")  // prevent directory traversal
 	filepathSplit := strings.Split(filepath, "/")
 	filename = filepathSplit[len(filepathSplit)-1]
 	return
@@ -214,6 +178,13 @@ func FileSize(path string) (size int64) {
 }
 
 func TarBz2(dir, outfile string) error {
+	// remove outfile
+	os.RemoveAll(outfile)
+
+	if !IsFileExist(dir) {
+		return fmt.Errorf("%s does not exist", dir)
+	}
+
 	// map files on disk to their paths in the archive
 	archive_dir_name := FileBaseName(dir)
 	if dir == "." {
@@ -246,16 +217,4 @@ func TarBz2(dir, outfile string) error {
 		return err
 	}
 	return nil
-}
-
-func ReverseString(s string) string {
-	rns := []rune(s) // convert to rune
-	for i, j := 0, len(rns)-1; i < j; i, j = i+1, j-1 {
-		// swap the letters of the string,
-		// like first with last and so on.
-		rns[i], rns[j] = rns[j], rns[i]
-	}
-
-	// return the reversed string.
-	return string(rns)
 }
