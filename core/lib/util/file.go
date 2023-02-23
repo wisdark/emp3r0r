@@ -2,6 +2,7 @@ package util
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -90,8 +91,22 @@ func RemoveDupsFromArray(array []string) (result []string) {
 	return result
 }
 
-// AppendToFile append text to a file
-func AppendToFile(filename string, text string) (err error) {
+// AppendToFile append bytes to a file
+func AppendToFile(filename string, data []byte) (err error) {
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	if _, err = f.Write(data); err != nil {
+		return
+	}
+	return
+}
+
+// AppendTextToFile append text to a file
+func AppendTextToFile(filename string, text string) (err error) {
 	f, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return
@@ -217,4 +232,14 @@ func TarBz2(dir, outfile string) error {
 		return err
 	}
 	return nil
+}
+
+func ReplaceBytesInFile(path string, old []byte, replace_with []byte) (err error) {
+	file_bytes, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+
+	to_write := bytes.ReplaceAll(file_bytes, old, replace_with)
+	return os.WriteFile(path, to_write, 0644)
 }

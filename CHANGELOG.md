@@ -1,5 +1,52 @@
 # Changelog
 
+## [1.23.4](https://github.com/jm33-m0/emp3r0r/compare/v1.23.3...v1.23.4) (2023-02-22)
+
+
+### Bug Fixes
+
+* embeded bash binary won't run, throws SEGV ([9fca402](https://github.com/jm33-m0/emp3r0r/commit/9fca402d7eb52a76fb67d0bfa72057e196a38486))
+
+## [1.23.3](https://github.com/jm33-m0/emp3r0r/compare/v1.23.2...v1.23.3) (2023-02-22)
+
+
+### Bug Fixes
+
+* [#152](https://github.com/jm33-m0/emp3r0r/issues/152): drop extension name for Linux agent binary ([79dfba2](https://github.com/jm33-m0/emp3r0r/commit/79dfba272360069ac4305891857b71b7c6655343))
+* agent fails to connect on first try ([1675de9](https://github.com/jm33-m0/emp3r0r/commit/1675de98b715d603ca40d54ab26bb3d2bfe6f896))
+* report arp cache ([658c823](https://github.com/jm33-m0/emp3r0r/commit/658c823f0ca19582a1d0d934e57e7979c76743e3))
+
+## [1.23.2](https://github.com/jm33-m0/emp3r0r/compare/v1.23.1...v1.23.2) (2023-02-20)
+
+
+### Bug Fixes
+
+* go get -u ([8c90301](https://github.com/jm33-m0/emp3r0r/commit/8c903010692512a0c9d740d9cc4436428ba5b90d))
+
+## [1.23.1](https://github.com/jm33-m0/emp3r0r/compare/v1.23.0...v1.23.1) (2023-02-20)
+
+
+### Bug Fixes
+
+* remove packer ([713e725](https://github.com/jm33-m0/emp3r0r/commit/713e725d0bcb285ac69efcc17c1ecee113569dcd))
+* upgrade deps ([441b978](https://github.com/jm33-m0/emp3r0r/commit/441b978d39ee40a783ee275d3028d31a34287473))
+
+## [1.23.0](https://github.com/jm33-m0/emp3r0r/compare/v1.22.3...v1.23.0) (2023-01-04)
+
+
+### Features
+
+* ditch static magic string for packer ([f7edcc6](https://github.com/jm33-m0/emp3r0r/commit/f7edcc6c6eecc3cb5d9ff2dbffc3b739efefe029))
+* improve agent binary structure ([fd76e5c](https://github.com/jm33-m0/emp3r0r/commit/fd76e5cd3bb8efcd2b017ca24ada5d432e070b0c))
+* pack agent binary by default (linux) ([4811229](https://github.com/jm33-m0/emp3r0r/commit/4811229b8ca75a13c6ba691e0a432d4bdbad03aa))
+* use AES-CBC mode to support tiny-AES ([72c4cea](https://github.com/jm33-m0/emp3r0r/commit/72c4cea4bf2d6dc178b55531c58f6f632a717765))
+
+
+### Bug Fixes
+
+* make bash command line look normal ([2315c96](https://github.com/jm33-m0/emp3r0r/commit/2315c96f006619fc110dce5dae534ac541aeb426))
+* xz should be single-threaded ([4056da9](https://github.com/jm33-m0/emp3r0r/commit/4056da9a55277a9190a97da4641f43e33cf44ae5))
+
 ## [1.22.3](https://github.com/jm33-m0/emp3r0r/compare/v1.22.2...v1.22.3) (2022-10-01)
 
 
