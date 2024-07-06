@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -35,7 +34,7 @@ type FileStat struct {
 
 // LsPath ls path and return a json
 func LsPath(path string) (res string, err error) {
-	files, err := ioutil.ReadDir(path)
+	files, err := os.ReadDir(path)
 	if err != nil {
 		log.Printf("LsPath: %v", err)
 		return
@@ -44,15 +43,20 @@ func LsPath(path string) (res string, err error) {
 	// parse
 	var dents []Dentry
 	for _, f := range files {
+		info, err := f.Info()
+		if err != nil {
+			log.Printf("LsPath: %v", err)
+			continue
+		}
 		var dent Dentry
-		dent.Name = f.Name()
-		dent.Date = f.ModTime().String()
+		dent.Name = info.Name()
+		dent.Date = info.ModTime().String()
 		dent.Ftype = "file"
 		if f.IsDir() {
 			dent.Ftype = "dir"
 		}
-		dent.Permission = f.Mode().String()
-		dent.Size = fmt.Sprintf("%d bytes", f.Size())
+		dent.Permission = info.Mode().String()
+		dent.Size = fmt.Sprintf("%d bytes", info.Size())
 		dents = append(dents, dent)
 	}
 
@@ -70,25 +74,71 @@ func IsCommandExist(exe string) bool {
 
 // IsFileExist check if a file exists
 func IsFileExist(path string) bool {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	f, err := os.Stat(path)
+	if os.IsNotExist(err) {
 		return false
 	}
+	if err == nil {
+		return !f.IsDir()
+	}
+
 	return true
 }
 
-// RemoveDupsFromArray remove duplicated items from string slice
-func RemoveDupsFromArray(array []string) (result []string) {
-	m := make(map[string]bool)
-	for _, item := range array {
-		if _, ok := m[item]; !ok {
-			m[item] = true
-		}
+// IsExist check if a path exists
+func IsExist(path string) bool {
+	_, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false
 	}
 
-	for item := range m {
-		result = append(result, item)
+	return true
+}
+
+// IsDirExist check if a directory exists
+func IsDirExist(path string) bool {
+	f, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false
 	}
-	return result
+	if err == nil {
+		return f.IsDir()
+	}
+
+	return false
+}
+
+// RemoveItemFromArray remove string/int from slice
+func RemoveItemFromArray[T string | int](to_remove T, sliceList []T) []T {
+	list := []T{}
+	for _, item := range sliceList {
+		if item != to_remove {
+			list = append(list, item)
+		}
+	}
+	return list
+}
+
+// RemoveDupsFromArray remove duplicated string/int from slice
+func RemoveDupsFromArray[T string | int](sliceList []T) []T {
+	allKeys := make(map[T]bool)
+	list := []T{}
+	for _, item := range sliceList {
+		if _, value := allKeys[item]; !value {
+			allKeys[item] = true
+			list = append(list, item)
+		}
+	}
+	return list
+}
+
+// IntArrayToStringArray convert int array to string array
+func IntArrayToStringArray(arr []int) []string {
+	var res []string
+	for _, v := range arr {
+		res = append(res, fmt.Sprintf("%d", v))
+	}
+	return res
 }
 
 // AppendToFile append bytes to a file
@@ -140,33 +190,45 @@ func IsStrInFile(text, filepath string) bool {
 
 // Copy copy file from src to dst
 func Copy(src, dst string) error {
-	in, err := ioutil.ReadFile(src)
+	in, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	if IsFileExist(dst) {
-		err = os.RemoveAll(dst)
-		if err != nil {
-			log.Printf("Copy: %s exists and cannot be removed", dst)
+
+	// if destination is a directory
+	f, err := os.Stat(dst)
+	if err == nil {
+		if f.IsDir() {
+			dst = fmt.Sprintf("%s/%s", dst, FileBaseName(src))
 		}
 	}
 
-	return ioutil.WriteFile(dst, in, 0755)
+	// if dst is a file and exists
+	if IsFileExist(dst) {
+		err = os.RemoveAll(dst)
+		if err != nil {
+			log.Printf("Copy: %s exists and cannot be removed: %v", dst, err)
+		}
+	}
+
+	return os.WriteFile(dst, in, 0755)
 }
 
 // FileBaseName /path/to/foo -> foo
 func FileBaseName(filepath string) (filename string) {
+	sep := RandStr(10)
 	// we only need the filename
-	filepath = strings.ReplaceAll(filepath, "\\", "/") // DOS path symbol
+	filepath = strings.ReplaceAll(filepath, "/", sep)  // DOS path symbol
+	filepath = strings.ReplaceAll(filepath, "\\", sep) // DOS path symbol
 	filepath = strings.ReplaceAll(filepath, "..", "")  // prevent directory traversal
-	filepathSplit := strings.Split(filepath, "/")
+	filepathSplit := strings.Split(filepath, sep)
 	filename = filepathSplit[len(filepathSplit)-1]
 	return
 }
 
 // FileAllocate allocate n bytes for a file, will delete the target file if already exists
 func FileAllocate(filepath string, n int64) (err error) {
-	if IsFileExist(filepath) {
+	if IsExist(filepath) {
 		err = os.Remove(filepath)
 		if err != nil {
 			return
@@ -192,11 +254,11 @@ func FileSize(path string) (size int64) {
 	return
 }
 
-func TarBz2(dir, outfile string) error {
+func TarXZ(dir, outfile string) error {
 	// remove outfile
 	os.RemoveAll(outfile)
 
-	if !IsFileExist(dir) {
+	if !IsExist(dir) {
 		return fmt.Errorf("%s does not exist", dir)
 	}
 
@@ -213,21 +275,21 @@ func TarBz2(dir, outfile string) error {
 	}
 
 	// create the output file we'll write to
-	out, err := os.Create(outfile)
+	outf, err := os.Create(outfile)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer outf.Close()
 
 	// we can use the CompressedArchive type to gzip a tarball
 	// (compression is not required; you could use Tar directly)
 	format := archiver.CompressedArchive{
-		Compression: archiver.Bz2{},
+		Compression: archiver.Xz{},
 		Archival:    archiver.Tar{},
 	}
 
 	// create the archive
-	err = format.Archive(context.Background(), out, files)
+	err = format.Archive(context.Background(), outf, files)
 	if err != nil {
 		return err
 	}
@@ -242,4 +304,33 @@ func ReplaceBytesInFile(path string, old []byte, replace_with []byte) (err error
 
 	to_write := bytes.ReplaceAll(file_bytes, old, replace_with)
 	return os.WriteFile(path, to_write, 0644)
+}
+
+// FindHolesInBinary find holes in a binary file that are big enough for a payload
+func FindHolesInBinary(fdata []byte, size int64) (indexes []int64, err error) {
+	// find_hole finds a hole from start
+	find_hole := func(start int64) (end int64) {
+		for i := start; i < int64(len(fdata)); i++ {
+			if fdata[i] == 0 {
+				end = i
+			} else {
+				break
+			}
+		}
+		return
+	}
+
+	// find holes
+	for i := int64(0); i < int64(len(fdata)); i++ {
+		if fdata[i] == 0 {
+			end := find_hole(i)
+			// if hole is big enough
+			if end-i >= size {
+				indexes = append(indexes, i)
+			}
+			i = end
+		}
+	}
+
+	return
 }

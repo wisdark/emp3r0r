@@ -1,3 +1,6 @@
+//go:build linux
+// +build linux
+
 package cc
 
 import (
@@ -6,8 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -77,9 +81,6 @@ func CliMain() {
 		readline.PcItem("get",
 			readline.PcItemDynamic(listRemoteDir())),
 
-		readline.PcItem("vim",
-			readline.PcItemDynamic(listRemoteDir())),
-
 		readline.PcItem("put",
 			readline.PcItemDynamic(listLocalFiles("./"))),
 
@@ -100,7 +101,6 @@ func CliMain() {
 		if cmd == "set" ||
 			cmd == "use" ||
 			cmd == "get" ||
-			cmd == "vim" ||
 			cmd == "put" ||
 			cmd == "cp" ||
 			cmd == "mkdir" ||
@@ -209,7 +209,8 @@ func SetDynamicPrompt() {
 	if CurrentMod == "<blank>" {
 		CurrentMod = "none" // if no module is selected
 	}
-	dynamicPrompt := fmt.Sprintf("%s @%s (%s) "+color.HiCyanString("> "),
+	dynamicPrompt := fmt.Sprintf("%s @%s (%s) "+
+		color.New(color.Bold, color.FgHiCyan).Sprintf("> "),
 		color.New(color.Bold, color.FgHiCyan).Sprint(PromptName),
 		color.New(color.FgCyan, color.Underline).Sprint(shortName),
 		color.New(color.FgHiBlue).Sprint(CurrentMod),
@@ -290,6 +291,29 @@ func CliPrintWarning(format string, a ...interface{}) {
 	}
 }
 
+// CliPrint print in bold cyan without logging prefix, regardless of debug level
+func CliPrint(format string, a ...interface{}) {
+	msg_color := color.New(color.Bold, color.FgCyan)
+	fmt.Println(msg_color.Sprintf(format, a...))
+	if IsAPIEnabled {
+		// send to socket
+		var resp APIResponse
+		msg := GetDateTime() + " PRINT: " + fmt.Sprintf(format, a...)
+		resp.MsgData = []byte(msg)
+		resp.Alert = false
+		resp.MsgType = LOG
+		data, err := json.Marshal(resp)
+		if err != nil {
+			log.Printf("CliPrint: %v", err)
+			return
+		}
+		_, err = APIConn.Write([]byte(data))
+		if err != nil {
+			log.Printf("CliPrint: %v", err)
+		}
+	}
+}
+
 // CliMsg print log in bold cyan, regardless of debug level
 func CliMsg(format string, a ...interface{}) {
 	msg_color := color.New(color.Bold, color.FgCyan)
@@ -362,6 +386,7 @@ func CliPrintSuccess(format string, a ...interface{}) {
 // CliFatalError print log in red, and exit
 func CliFatalError(format string, a ...interface{}) {
 	errorColor := color.New(color.Bold, color.FgHiRed)
+	CliMsg("Run 'tmux kill-session -t emp3r0r' to clean up dead emp3r0r windows")
 	log.Fatal(errorColor.Sprintf(format, a...))
 	if IsAPIEnabled {
 		// send to socket
@@ -406,7 +431,7 @@ func CliPrintError(format string, a ...interface{}) {
 }
 
 // CliAsk prompt for an answer from user
-func CliAsk(prompt string) (answer string) {
+func CliAsk(prompt string, allow_empty bool) (answer string) {
 	// if there's no way to show prompt
 	if IsAPIEnabled {
 		return "No terminal available"
@@ -416,19 +441,18 @@ func CliAsk(prompt string) (answer string) {
 	EmpReadLine.Config.EOFPrompt = ""
 	EmpReadLine.Config.InterruptPrompt = ""
 
-	defer EmpReadLine.SetPrompt(EmpPrompt)
+	defer SetDynamicPrompt()
 
 	var err error
 	for {
 		answer, err = EmpReadLine.Readline()
 		if err != nil {
 			if err == readline.ErrInterrupt || err == io.EOF {
-				continue
+				break
 			}
-			CliPrintError("CliAsk: %v", err)
 		}
 		answer = strings.TrimSpace(answer)
-		if answer != "" {
+		if answer != "" && !allow_empty {
 			break
 		}
 	}
@@ -447,7 +471,7 @@ func CliYesNo(prompt string) bool {
 	EmpReadLine.Config.EOFPrompt = ""
 	EmpReadLine.Config.InterruptPrompt = ""
 
-	defer EmpReadLine.SetPrompt(EmpPrompt)
+	defer SetDynamicPrompt()
 
 	answer, err := EmpReadLine.Readline()
 	if err != nil {
@@ -463,6 +487,8 @@ func CliYesNo(prompt string) bool {
 
 // CliListOptions list currently available options for `set`
 func CliListOptions() {
+	TargetsMutex.RLock()
+	defer TargetsMutex.RUnlock()
 	opts := make(map[string]string)
 	opts["module"] = CurrentMod
 	_, exist := Targets[CurrentTarget]
@@ -477,7 +503,51 @@ func CliListOptions() {
 		opts[k] = v.Val
 	}
 
-	CliPrettyPrint("Option", "Value", &opts)
+	// build table
+	tdata := [][]string{}
+	tableString := &strings.Builder{}
+	table := tablewriter.NewWriter(tableString)
+	table.SetHeader([]string{"Option", "Help", "Value"})
+	table.SetBorder(true)
+	table.SetRowLine(true)
+	table.SetAutoWrapText(true)
+	table.SetColWidth(20)
+
+	// color
+	table.SetHeaderColor(tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+		tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+		tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor})
+	table.SetColumnColor(tablewriter.Colors{tablewriter.FgHiBlueColor},
+		tablewriter.Colors{tablewriter.FgBlueColor},
+		tablewriter.Colors{tablewriter.FgBlueColor})
+
+	// fill table
+	module_help, is_help_exist := emp3r0r_data.ModuleHelp[CurrentMod]
+	for k, v := range opts {
+		help := "N/A"
+		if k == "module" {
+			help = "Selected module"
+		}
+		if k == "target" {
+			help = "Selected target"
+		}
+		if is_help_exist {
+			h, ok := module_help[k]
+			if ok {
+				help = h
+			}
+		}
+
+		tdata = append(tdata,
+			[]string{util.SplitLongLine(k, 20),
+				util.SplitLongLine(help, 20),
+				util.SplitLongLine(v, 20)})
+	}
+	table.AppendBulk(tdata)
+	table.Render()
+	out := tableString.String()
+	AdaptiveTable(out)
+	CliPrint("\n%s", out)
 }
 
 // CliListCmds list all commands in tree format
@@ -507,15 +577,30 @@ func CliBanner() error {
 	if err != nil {
 		log.Fatalf("CowSay: %v", err)
 	}
+
 	// C2 names
+	err = LoadCACrt()
+	if err != nil {
+		CliPrintWarning("Failed to parse CA cert: %v", err)
+	}
 	c2_names := tun.NamesInCert(ServerCrtFile)
 	if len(c2_names) <= 0 {
 		CliFatalError("C2 has no names?")
 	}
 	name_list := strings.Join(c2_names, ", ")
 
-	say, err := cow.Say(fmt.Sprintf("welcome! you are using version %s,\nC2 listening on *:%s,\nC2 names: %s",
-		emp3r0r_data.Version, RuntimeConfig.CCPort, name_list))
+	say, err := cow.Say(fmt.Sprintf("welcome! you are using version %s,\n"+
+		"C2 listening on *:%s,\n"+
+		"Shadowsocks port *:%s,\n"+
+		"KCP port *:%s,\n"+
+		"C2 names: %s\n"+
+		"CA fingerprint: %s",
+		emp3r0r_data.Version,
+		RuntimeConfig.CCPort,
+		RuntimeConfig.ShadowsocksPort,
+		RuntimeConfig.KCPPort,
+		name_list,
+		RuntimeConfig.CAFingerprint))
 	if err != nil {
 		log.Fatalf("CowSay: %v", err)
 	}
@@ -571,7 +656,7 @@ func CliPrettyPrint(header1, header2 string, map2write *map[string]string) {
 	table.Render()
 	out := tableString.String()
 	AdaptiveTable(out)
-	CliPrintInfo("\n%s", out)
+	CliPrint("\n%s", out)
 }
 
 // encoded logo of emp3r0r
@@ -595,29 +680,11 @@ Cg==
 // autocomplete module options
 func listValChoices() func(string) []string {
 	return func(line string) []string {
-		switch CurrentMod {
-		case emp3r0r_data.ModCMD_EXEC:
-			return Options["cmd_to_exec"].Vals
-		case emp3r0r_data.ModSHELL:
-			ret := append(Options["shell"].Vals, Options["port"].Vals...)
-			return ret
-		case emp3r0r_data.ModCLEAN_LOG:
-			return Options["keyword"].Vals
-		case emp3r0r_data.ModLPE_SUGGEST:
-			return Options["lpe_helper"].Vals
-		case emp3r0r_data.ModPERSISTENCE:
-			return Options["method"].Vals
-		case emp3r0r_data.ModPROXY:
-			return append(Options["status"].Vals, Options["port"].Vals...)
-		case emp3r0r_data.ModINJECTOR:
-			return append(Options["pid"].Vals, Options["method"].Vals...)
-		case emp3r0r_data.ModPORT_FWD:
-			ret := append(Options["listen_port"].Vals, Options["to"].Vals...)
-			ret = append(ret, Options["switch"].Vals...)
-			return ret
+		ret := make([]string, 0)
+		for _, opt := range Options {
+			ret = append(ret, opt.Vals...)
 		}
-
-		return nil
+		return ret
 	}
 }
 
@@ -718,7 +785,7 @@ func listRemoteDir() func(string) []string {
 func listLocalFiles(path string) func(string) []string {
 	return func(line string) []string {
 		names := make([]string, 0)
-		files, _ := ioutil.ReadDir(path)
+		files, _ := os.ReadDir(path)
 		for _, f := range files {
 			name := strings.ReplaceAll(f.Name(), "\t", "\\t")
 			name = strings.ReplaceAll(name, " ", "\\ ")
@@ -756,4 +823,36 @@ func setDebugLevel(cmd string) {
 	} else {
 		log.SetFlags(log.Ldate | log.Ltime | log.LstdFlags)
 	}
+}
+
+// CopyToClipboard copy data to clipboard using xsel -b
+func CopyToClipboard(data []byte) {
+	exe := "xsel"
+	cmd := exec.Command("xsel", "-bi")
+	if os.Getenv("WAYLAND_DISPLAY") != "" {
+		exe = "wl-copy"
+		cmd = exec.Command("wl-copy")
+	} else if os.Getenv("DISPLAY") == "" {
+		CliPrintWarning("Neither Wayland nor X11 is running, CopyToClipboard will abort")
+		return
+	}
+	if !util.IsCommandExist(exe) {
+		CliPrintWarning("%s not installed", exe)
+		return
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		CliPrintWarning("CopyToClipboard read stdin: %v", err)
+		return
+	}
+	go func() {
+		defer stdin.Close()
+		_, _ = stdin.Write(data)
+	}()
+
+	err = cmd.Run()
+	if err != nil {
+		CliPrintWarning("CopyToClipboard: %v", err)
+	}
+	CliPrintInfo("Copied to clipboard")
 }

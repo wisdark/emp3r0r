@@ -1,9 +1,12 @@
+//go:build linux
+// +build linux
+
 package cc
+
 
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"strconv"
@@ -97,7 +100,7 @@ func TmuxInitWindows() (err error) {
 	// we don't want the tmux pane be killed
 	// so easily. Yes, fuck /bin/cat, we use our own cat
 	cat := CAT
-	if !util.IsFileExist(cat) {
+	if !util.IsExist(cat) {
 		pwd, e := os.Getwd()
 		if e != nil {
 			pwd = e.Error()
@@ -248,11 +251,6 @@ func (pane *Emp3r0rPane) Printf(clear bool, format string, a ...interface{}) {
 		}
 	}
 
-	if !TmuxSwitchWindow(pane.WindowID) {
-		CliPrintWarning("pane '%s' printf: unable to switch to tmux window '%s'",
-			pane.Title, pane.WindowID)
-	}
-	defer TmuxSwitchWindow(HomeWindow)
 	TmuxUpdatePane(pane)
 	id := pane.ID
 	if !pane.Alive {
@@ -267,7 +265,7 @@ func (pane *Emp3r0rPane) Printf(clear bool, format string, a ...interface{}) {
 	}
 
 	// print msg
-	err := ioutil.WriteFile(pane.TTY, []byte(msg), 0777)
+	err := os.WriteFile(pane.TTY, []byte(msg), 0777)
 	if err != nil {
 		CliPrintWarning("Cannot print on tmux window %s (%s): %v,\n"+
 			"printing to main window instead.\n\n",
@@ -430,10 +428,10 @@ func TmuxNewPane(title, hV string, target_pane_id string, size int, cmd string) 
 	}
 	is_new_window := hV == "" && size == 0
 
-	job := fmt.Sprintf(`tmux split-window -%s -p %d -P -d -F "#{pane_id}:#{pane_pid}:#{pane_tty}:#{window_id}" '%s'`,
+	job := fmt.Sprintf(`tmux split-window -%s -l %d%% -P -d -F "#{pane_id}:#{pane_pid}:#{pane_tty}:#{window_id}" '%s'`,
 		hV, size, cmd)
 	if target_pane_id != "" {
-		job = fmt.Sprintf(`tmux split-window -t %s -%s -p %d -P -d -F "#{pane_id}:#{pane_pid}:#{pane_tty}:#{window_id}" '%s'`,
+		job = fmt.Sprintf(`tmux split-window -t %s -%s -l %d%% -P -d -F "#{pane_id}:#{pane_pid}:#{pane_tty}:#{window_id}" '%s'`,
 			target_pane_id, hV, size, cmd)
 	}
 

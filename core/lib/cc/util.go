@@ -1,39 +1,31 @@
+//go:build linux
+// +build linux
+
 package cc
+
 
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
-	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/cavaliergopher/grab/v3"
 	"github.com/google/uuid"
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
+	"github.com/jm33-m0/emp3r0r/core/lib/tun"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
 )
 
 // DownloadFile download file using default http client
 func DownloadFile(url, path string) (err error) {
-	var (
-		resp *http.Response
-		data []byte
-	)
-	resp, err = http.Get(url)
-	if err != nil {
-		return
-	}
-
-	data, err = ioutil.ReadAll(resp.Body)
-	defer resp.Body.Close()
-	if err != nil {
-		return
-	}
-
-	return ioutil.WriteFile(path, data, 0600)
+	CliPrintDebug("Downloading '%s' to '%s'", url, path)
+	_, err = grab.Get(path, url)
+	return
 }
 
 // SendCmd send command to agent
@@ -81,7 +73,7 @@ func wait_for_cmd_response(cmd, cmd_id string, agent *emp3r0r_data.AgentSystemIn
 			return
 		}
 		wait_time := time.Since(now)
-		if wait_time > 1*time.Minute {
+		if wait_time > 1*time.Minute && !waitNeeded(cmd) {
 			CliPrintError("Executing %s on %s: unresponsive for %v, removing agent from list",
 				strconv.Quote(cmd),
 				strconv.Quote(agent.Name),
@@ -91,6 +83,10 @@ func wait_for_cmd_response(cmd, cmd_id string, agent *emp3r0r_data.AgentSystemIn
 		}
 		util.TakeABlink()
 	}
+}
+
+func waitNeeded(cmd string) bool {
+	return strings.HasPrefix(cmd, "!") || strings.HasPrefix(cmd, "#get") || strings.HasPrefix(cmd, "put ")
 }
 
 // SendCmdToCurrentTarget send a command to currently selected agent
@@ -139,7 +135,7 @@ func VimEdit(filepath string) (err error) {
 		}
 	}()
 
-	paneBytes, e := ioutil.ReadFile(Temp + "vim.pane")
+	paneBytes, e := os.ReadFile(Temp + "vim.pane")
 	pane := string(paneBytes)
 	if e != nil {
 		return fmt.Errorf("cannot detect tmux pane number: %v", e)
@@ -198,6 +194,8 @@ func OpenInNewTerminalWindow(name, cmd string) error {
 
 // IsAgentExistByTag is agent already in target list?
 func IsAgentExistByTag(tag string) bool {
+	TargetsMutex.RLock()
+	defer TargetsMutex.RUnlock()
 	for a := range Targets {
 		if a.Tag == tag {
 			return true
@@ -209,6 +207,8 @@ func IsAgentExistByTag(tag string) bool {
 
 // IsAgentExist is agent already in target list?
 func IsAgentExist(t *emp3r0r_data.AgentSystemInfo) bool {
+	TargetsMutex.RLock()
+	defer TargetsMutex.RUnlock()
 	for a := range Targets {
 		if a.Tag == t.Tag {
 			return true
@@ -220,13 +220,36 @@ func IsAgentExist(t *emp3r0r_data.AgentSystemInfo) bool {
 
 // assignTargetIndex assign an index number to new agent
 func assignTargetIndex() (index int) {
-	for _, c := range Targets {
-		if index == c.Index {
-			index++
-		}
+	TargetsMutex.RLock()
+	defer TargetsMutex.RUnlock()
+
+	// index is 0 for the first agent
+	if len(Targets) == 0 {
+		return 0
 	}
 
-	return
+	// loop thru agent list and get all index numbers
+	index_list := make([]int, 0)
+	for _, c := range Targets {
+		index_list = append(index_list, c.Index)
+	}
+
+	// sort
+	sort.Ints(index_list)
+
+	// find available numbers
+	available_indexes := make([]int, 0)
+	for i := 0; i < len(index_list); i++ {
+		if index_list[i] != i {
+			available_indexes = append(available_indexes, i)
+		}
+	}
+	if len(available_indexes) == 0 {
+		return len(index_list)
+	}
+
+	// use the smallest available number
+	return available_indexes[0]
 }
 
 // TermClear clear screen
@@ -244,4 +267,31 @@ func GetDateTime() (datetime string) {
 	datetime = now.String()
 
 	return
+}
+
+// IsCCRunning check if CC is already running
+func IsCCRunning() bool {
+	// it is running if we can connect to it
+	return tun.IsPortOpen("127.0.0.1", RuntimeConfig.CCPort)
+}
+
+// UnlockDownloads if there are incomplete file downloads that are "locked", unlock them
+// unless CC is actually running/downloading
+func UnlockDownloads() error {
+	// unlock downloads
+	files, err := os.ReadDir(FileGetDir)
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f.Name(), ".lock") {
+			err = os.Remove(FileGetDir + f.Name())
+			CliPrintDebug("Unlocking download: %s", f.Name())
+			if err != nil {
+				return fmt.Errorf("Remove %s: %v", f.Name(), err)
+			}
+		}
+	}
+
+	return nil
 }

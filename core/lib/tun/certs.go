@@ -12,12 +12,13 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math/big"
 	"net"
 	"os"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 func publicKey(priv interface{}) interface{} {
@@ -93,7 +94,7 @@ func GenCerts(hosts []string, outname string, isCA bool) (err error) {
 		}
 
 		// ca key file
-		ca_data, err := ioutil.ReadFile("ca-key.pem")
+		ca_data, err := os.ReadFile("ca-key.pem")
 		if err != nil {
 			return fmt.Errorf("Read ca-key.pem: %v", err)
 		}
@@ -101,7 +102,7 @@ func GenCerts(hosts []string, outname string, isCA bool) (err error) {
 		cakey, _ = x509.ParseECPrivateKey(block.Bytes)
 
 		// ca cert file
-		ca_data, err = ioutil.ReadFile("ca-cert.pem")
+		ca_data, err = os.ReadFile("ca-cert.pem")
 		if err != nil {
 			return fmt.Errorf("Read ca-cert.pem: %v", err)
 		}
@@ -121,7 +122,7 @@ func GenCerts(hosts []string, outname string, isCA bool) (err error) {
 	outkey := fmt.Sprintf("%s-key.pem", outname)
 	// cert
 	pem.Encode(out, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
-	err = ioutil.WriteFile(outcert, out.Bytes(), 0600)
+	err = os.WriteFile(outcert, out.Bytes(), 0600)
 	if err != nil {
 		return fmt.Errorf("Write %s: %v", outcert, err)
 	}
@@ -129,7 +130,7 @@ func GenCerts(hosts []string, outname string, isCA bool) (err error) {
 
 	// key
 	pem.Encode(out, pemBlockForKey(priv))
-	err = ioutil.WriteFile(outkey, out.Bytes(), 0600)
+	err = os.WriteFile(outkey, out.Bytes(), 0600)
 	if err != nil {
 		return fmt.Errorf("Write %s: %v", outkey, err)
 	}
@@ -139,7 +140,7 @@ func GenCerts(hosts []string, outname string, isCA bool) (err error) {
 
 // NamesInCert find domain names and IPs in server certificate
 func NamesInCert(cert_file string) (names []string) {
-	cert, err := ParseCert(cert_file)
+	cert, err := ParseCertPemFile(cert_file)
 	if err != nil {
 		log.Printf("ParseCert %s: %v", cert_file, err)
 		return
@@ -155,13 +156,67 @@ func NamesInCert(cert_file string) (names []string) {
 	return
 }
 
-// ParseCert read from PEM file and return parsed cert
-func ParseCert(cert_file string) (cert *x509.Certificate, err error) {
-	cert_data, err := ioutil.ReadFile(cert_file)
+func ParsePem(data []byte) (*x509.Certificate, error) {
+	block, _ := pem.Decode(data)
+	return x509.ParseCertificate(block.Bytes)
+}
+
+// ParseCertPemFile read from PEM file and return parsed cert
+func ParseCertPemFile(cert_file string) (cert *x509.Certificate, err error) {
+	cert_data, err := os.ReadFile(cert_file)
 	if err != nil {
 		err = fmt.Errorf("Read ca-cert.pem: %v", err)
 		return
 	}
-	block, _ := pem.Decode(cert_data)
-	return x509.ParseCertificate(block.Bytes)
+	return ParsePem(cert_data)
+}
+
+// GetFingerprint return SHA256 fingerprint of a cert
+func GetFingerprint(cert_file string) string {
+	cert, err := ParseCertPemFile(cert_file)
+	if err != nil {
+		log.Printf("GetFingerprint: ParseCert %s: %v", cert_file, err)
+		return ""
+	}
+	return SHA256SumRaw(cert.Raw)
+}
+
+// Generate a new key pair for use with openssh
+func GenerateSSHKeyPair() (privateKey, publicKey []byte, err error) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		err = fmt.Errorf("GenerateKey: %v", err)
+		return
+
+	}
+	// pem encode
+	priv_buf := new(bytes.Buffer)
+	pem.Encode(priv_buf, pemBlockForKey(priv))
+	privateKey = priv_buf.Bytes()
+
+	// public
+	pub_buf := new(bytes.Buffer)
+	pub := &priv.PublicKey
+	pubBytes, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		err = fmt.Errorf("MarshalPKIXPublicKey: %v", err)
+		return
+
+	}
+	pem.Encode(pub_buf, &pem.Block{Type: "EC PUBLIC KEY", Bytes: pubBytes})
+	publicKey = pub_buf.Bytes()
+
+	return
+}
+
+// SSHPublicKey return ssh.PublicKey from PEM encoded private key
+func SSHPublicKey(privkey []byte) (pubkey ssh.PublicKey, err error) {
+	priv, err := ssh.ParsePrivateKey(privkey)
+	if err != nil {
+		err = fmt.Errorf("ParsePrivateKey: %v", err)
+		return
+	}
+	pubkey = priv.PublicKey()
+
+	return
 }

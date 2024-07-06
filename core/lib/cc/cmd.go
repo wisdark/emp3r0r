@@ -1,3 +1,6 @@
+//go:build linux
+// +build linux
+
 package cc
 
 import (
@@ -18,8 +21,6 @@ var CommandHelp = map[string]string{
 	"use":             "Use a module. eg. `use <module_name>`",
 	"run":             "Run selected module, make sure you have set required options",
 	"info":            "What options do we have?",
-	"gen_agent":       "Generate agent with provided binary and emp3r0r.json",
-	"pack_agent":      "Pack agent to make it smaller and harder to analysis",
 	"upgrade_agent":   "Upgrade agent on selected target",
 	"ls":              "List current directory of selected agent",
 	"mv":              "Move a file to another location on selected target",
@@ -31,7 +32,6 @@ var CommandHelp = map[string]string{
 	"ps":              "Process list of selected agent",
 	"kill":            "Terminate a process on selected agent: eg. `kill <pid>`",
 	"get":             "Download a file from selected agent",
-	"vim":             "Edit a text file on selected agent",
 	"put":             "Upload a file to selected agent",
 	"screenshot":      "Take a screenshot of selected agent",
 	"suicide":         "Kill agent process, delete agent root directory",
@@ -46,7 +46,7 @@ var CommandHelp = map[string]string{
 
 // CmdFuncs holds a map of helper functions
 var CmdFuncs = map[string]func(){
-	"ls_targets":    ListTargets,
+	"ls_targets":    ls_targets,
 	"ls_modules":    ListModules,
 	"ls_port_fwds":  ListPortFwds,
 	"info":          CliListOptions,
@@ -54,8 +54,6 @@ var CmdFuncs = map[string]func(){
 	"screenshot":    TakeScreenshot,
 	"file_manager":  OpenFileManager,
 	"upgrade_agent": UpgradeAgent,
-	"gen_agent":     GenAgent,
-	"pack_agent":    PackAgentBinary,
 	"suicide":       Suicide,
 }
 
@@ -75,7 +73,6 @@ var CmdFuncsWithArgs = map[string]func(string){
 	"delete_port_fwd": DeletePortFwdSession,
 	"debug":           setDebugLevel,
 	"search":          ModuleSearch,
-	"vim":             vimEditFile,
 	"set":             setOptVal,
 	"label":           setTargetLabel,
 	"target":          setCurrentTarget,
@@ -123,6 +120,10 @@ func CmdHandler(cmd string) (err error) {
 				UpdateOptions(CurrentMod)
 				CliPrintInfo("Using module %s", strconv.Quote(CurrentMod))
 				ModuleDetails(CurrentMod)
+				description, exists := emp3r0r_data.ModuleComments[CurrentMod]
+				if exists {
+					CliPrint("%s", description)
+				}
 				CliListOptions()
 
 				return
@@ -167,42 +168,16 @@ func CmdHelp(mod string) {
 			if !exists {
 				help = map[string]string{"<N/A>": modhelp}
 			}
+			for m, h := range emp3r0r_data.ModuleComments {
+				if m == mod {
+					CliPrint("\n%s", h)
+				}
+			}
 			CliPrettyPrint("Option", "Help", &help)
 			return
 		}
 	}
 	CliPrintError("Help yourself")
-}
-
-func vimEditFile(cmd string) {
-	cmdSplit := util.ParseCmd(cmd)
-	if len(cmdSplit) < 2 {
-		CliPrintError("What file to edit?")
-		return
-	}
-	filepath := strings.Join(cmdSplit[1:], " ")
-	filename := util.FileBaseName(filepath)
-
-	// tell user what to do
-	CliPrintInfo("[*] Now edit %s in vim window",
-		filepath)
-
-	// edit remote files
-	if GetFile(filepath, CurrentTarget) != nil {
-		CliPrintError("Cannot download %s", filepath)
-		return
-	}
-
-	if err = VimEdit(FileGetDir + filename); err != nil {
-		CliPrintError("VimEdit: %v", err)
-		return
-	} // wait until vim exits
-
-	// upload the new file to target
-	if PutFile(FileGetDir+filename, filepath, CurrentTarget) != nil {
-		CliPrintError("Cannot upload %s", filepath)
-		return
-	}
 }
 
 func setCurrentTarget(cmd string) {
@@ -234,7 +209,7 @@ func setCurrentTarget(cmd string) {
 			CliPrintInfo("Updating sftp window")
 			err = AgentSFTPPane.KillPane()
 			if err != nil {
-				CliPrintInfo("Updating sftp window: %v", err)
+				CliPrintWarning("Updating sftp window: %v", err)
 			}
 			AgentSFTPPane = nil
 		}
@@ -242,21 +217,15 @@ func setCurrentTarget(cmd string) {
 			CliPrintInfo("Updating shell window")
 			err = AgentShellPane.KillPane()
 			if err != nil {
-				CliPrintInfo("Updating shell window: %v", err)
+				CliPrintWarning("Updating shell window: %v", err)
 			}
 			AgentShellPane = nil
 		}
 
-		// do not open shell automatically in Windows
-		if a.GOOS != "windows" {
-			CliPrintInfo("Opening Shell window")
-			err = SSHClient("bash", "", RuntimeConfig.SSHDPort, true)
-			if err != nil {
-				CliPrintError("SSHClient: %v", err)
-			}
-		}
-		CliPrintInfo("Opening SFTP window")
-		err = SSHClient("sftp", "", RuntimeConfig.SSHDPort, true)
+		// open a shell
+		CliPrintInfo("Please `use interactive_shell` to open an shell")
+		CliPrintInfo("Opening SFTP pane")
+		err = SSHClient("sftp", "", RuntimeConfig.SSHDShellPort, true)
 		if err != nil {
 			CliPrintError("SFTPClient: %v", err)
 		}
@@ -278,24 +247,28 @@ func setCurrentTarget(cmd string) {
 func setTargetLabel(cmd string) {
 	cmdSplit := strings.Fields(cmd)
 	if len(cmdSplit) < 2 {
-		CliPrintError("Invalid command %s, usage: 'label <target tag/index> <label>'", strconv.Quote(cmd))
+		CliPrintError("Invalid command %s, usage: 'label <tag/index> <label>'", strconv.Quote(cmd))
 		return
 	}
-	index, e := strconv.Atoi(cmdSplit[1])
+	target := new(emp3r0r_data.AgentSystemInfo)
 	label := strings.Join(cmdSplit[2:], " ")
 
-	var target *emp3r0r_data.AgentSystemInfo
+	// select by tag or index
+	index, e := strconv.Atoi(cmdSplit[1])
 	if e != nil {
+		// try by tag
 		target = GetTargetFromTag(cmdSplit[1])
-		if target != nil {
-			Targets[target].Label = label // set label
-			labelAgents()
-			CliPrintSuccess("%s has been labeled as %s", target.Tag, label)
+		if target == nil {
+			// cannot parse
+			CliPrintError("Cannot set target label by index: %v", e)
+			return
 		}
-		CliPrintError("cannot set target label by index: %v", e)
-		return
+	} else {
+		// try by index
+		target = GetTargetFromIndex(index)
 	}
-	target = GetTargetFromIndex(index)
+
+	// target exists?
 	if target == nil {
 		CliPrintError("Target does not exist")
 		return

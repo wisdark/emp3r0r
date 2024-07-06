@@ -1,9 +1,12 @@
+//go:build linux
+// +build linux
+
 package cc
+
 
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"strconv"
 	"strings"
@@ -19,18 +22,19 @@ import (
 
 // ModConfig config.json of a module
 // Example
-// {
-//     "name": "LES",
-//     "exec": "les.sh",
-//     "platform": "Linux",
-//     "interactive": false,
-//     "author": "jm33-ng",
-//     "date": "2022-01-12",
-//     "comment": "https://github.com/mzet-/linux-exploit-suggester",
-//     "options": {
-//         "args": ["--checksec", "run les.sh with this commandline arg"]
-//     }
-// }
+//
+//	{
+//	    "name": "LES",
+//	    "exec": "les.sh",
+//	    "platform": "Linux",
+//	    "interactive": false,
+//	    "author": "jm33-ng",
+//	    "date": "2022-01-12",
+//	    "comment": "https://github.com/mzet-/linux-exploit-suggester",
+//	    "options": {
+//	        "args": ["--checksec", "run les.sh with this commandline arg"]
+//	    }
+//	}
 type ModConfig struct {
 	Name          string `json:"name"`        // Display as this name
 	Exec          string `json:"exec"`        // Run this executable file
@@ -76,7 +80,7 @@ func moduleCustom() {
 		if config.IsInteractive {
 			// empty out start.sh
 			// we will run the module as shell
-			err = ioutil.WriteFile(start_sh, []byte("echo emp3r0r-interactive-module\n"), 0600)
+			err = os.WriteFile(start_sh, []byte("echo emp3r0r-interactive-module\n"), 0600)
 			if err != nil {
 				CliPrintError("write %s: %v", start_sh, err)
 				return
@@ -84,14 +88,16 @@ func moduleCustom() {
 		}
 
 		// compress module files
-		tarball := WWWRoot + CurrentMod + ".tar.bz2"
-		CliPrintInfo("Compressing %s with bz2...", CurrentMod)
+		tarball := WWWRoot + CurrentMod + ".tar.xz"
+		CliPrintInfo("Compressing %s with xz...", CurrentMod)
 		path := fmt.Sprintf("%s/%s", config.Path, CurrentMod)
-		err = util.TarBz2(path, tarball)
+		err = util.TarXZ(path, tarball)
 		if err != nil {
 			CliPrintError("Compressing %s: %v", CurrentMod, err)
 			return
 		}
+		CliPrintInfo("Created %.4fMB archive (%s) for module '%s'",
+			float64(util.FileSize(tarball))/1024/1024, tarball, CurrentMod)
 
 		// tell agent to download and execute this module
 		checksum := tun.SHA256SumFile(tarball)
@@ -179,12 +185,12 @@ func ModuleDetails(modName string) {
 // scan custom modules in ModuleDir,
 // and update ModuleHelpers, ModuleDocs
 func InitModules() {
-	if !util.IsFileExist(WWWRoot) {
+	if !util.IsExist(WWWRoot) {
 		os.MkdirAll(WWWRoot, 0700)
 	}
 
 	// get vaccine ready
-	if !util.IsFileExist(UtilsArchive) {
+	if !util.IsExist(UtilsArchive) {
 		err = CreateVaccineArchive()
 		if err != nil {
 			CliPrintWarning("CreateVaccineArchive: %v", err)
@@ -193,11 +199,11 @@ func InitModules() {
 
 	load_mod := func(mod_dir string) {
 		// don't bother if module dir not found
-		if !util.IsFileExist(mod_dir) {
+		if !util.IsExist(mod_dir) {
 			return
 		}
 		CliPrintInfo("Scanning %s for modules", mod_dir)
-		dirs, err := ioutil.ReadDir(mod_dir)
+		dirs, err := os.ReadDir(mod_dir)
 		if err != nil {
 			CliPrintError("Failed to scan custom modules: %v", err)
 			return
@@ -207,7 +213,7 @@ func InitModules() {
 				continue
 			}
 			config_file := fmt.Sprintf("%s/%s/config.json", mod_dir, dir.Name())
-			if !util.IsFileExist(config_file) {
+			if !util.IsExist(config_file) {
 				continue
 			}
 			config, err := readModCondig(config_file)
@@ -249,7 +255,7 @@ func InitModules() {
 // readModCondig read config.json of a module
 func readModCondig(file string) (pconfig *ModConfig, err error) {
 	// read JSON
-	jsonData, err := ioutil.ReadFile(file)
+	jsonData, err := os.ReadFile(file)
 	if err != nil {
 		return nil, fmt.Errorf("Read %s: %v", file, err)
 	}
@@ -273,7 +279,7 @@ func genStartScript(config *ModConfig, outfile string) (err error) {
 	data = fmt.Sprintf("%s ./%s ", data, config.Exec) // run with environment vars
 
 	// write config.json
-	return ioutil.WriteFile(outfile, []byte(data), 0600)
+	return os.WriteFile(outfile, []byte(data), 0600)
 }
 
 func updateModuleHelp(config *ModConfig) error {

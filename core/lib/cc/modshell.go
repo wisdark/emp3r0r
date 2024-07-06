@@ -1,4 +1,8 @@
+//go:build linux
+// +build linux
+
 package cc
+
 
 import (
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
@@ -63,9 +67,9 @@ func moduleShell() {
 	shell := Options["shell"].Val
 	args := Options["args"].Val
 	port := Options["port"].Val
-	if shell == "bash" {
-		port = RuntimeConfig.SSHDPort
-		SSHShellPort["bash"] = port
+	if shell == "bash" || shell == "elvish" {
+		port = RuntimeConfig.SSHDShellPort
+		SSHShellPort[shell] = port
 	}
 
 	// run

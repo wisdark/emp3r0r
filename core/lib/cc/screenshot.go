@@ -1,4 +1,8 @@
+//go:build linux
+// +build linux
+
 package cc
+
 
 import (
 	"fmt"
@@ -10,7 +14,7 @@ import (
 
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
-	"github.com/mholt/archiver"
+	"github.com/mholt/archiver/v3"
 )
 
 // TakeScreenshot take a screenshot of selected target, and download it
@@ -42,12 +46,12 @@ func processScreenshot(out string, target *emp3r0r_data.AgentSystemInfo) (err er
 
 	// be sure we have downloaded the file
 	is_download_completed := func() bool {
-		return !util.IsFileExist(FileGetDir+path+".downloading") &&
-			util.IsFileExist(FileGetDir+path)
+		return !util.IsExist(FileGetDir+path+".downloading") &&
+			util.IsExist(FileGetDir+path)
 	}
 
 	is_download_corrupted := func() bool {
-		return !is_download_completed() && !util.IsFileExist(FileGetDir+path+".lock")
+		return !is_download_completed() && !util.IsExist(FileGetDir+path+".lock")
 	}
 	for {
 		time.Sleep(100 * time.Millisecond)

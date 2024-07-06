@@ -6,6 +6,10 @@ package agent
 import (
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"unsafe"
 
 	"github.com/gonutz/w32/v2"
@@ -19,6 +23,26 @@ var (
 	ConsoleExtraWidth  = 0 // scroll bar, etc
 	ConsoleExtraHeight = 0 // title bar
 )
+
+type coord struct {
+	x int16
+	y int16
+}
+
+type smallRect struct {
+	left   int16
+	top    int16
+	right  int16
+	bottom int16
+}
+
+type consoleScreenBufferInfo struct {
+	size              coord
+	cursorPosition    coord
+	attributes        uint16
+	window            smallRect
+	maximumWindowSize coord
+}
 
 // IsMainWindow returns true if a window with the specified handle is a main window.
 func IsMainWindow(hwnd w32.HWND) bool {
@@ -139,7 +163,7 @@ func SetCosoleWinsize(pid, w, h int) {
 		// in pixels
 		default_w_px := default_width * font_size / 2
 		default_h_px := default_height * font_size
-		log.Printf("Default window (client rectangle) is %dx%d (chars) or %dx%d (pixels)",
+		log.Printf("Default window (client rectangle, excluding frames) is %dx%d (chars) or %dx%d (pixels)",
 			default_width, default_height,
 			default_w_px, default_h_px)
 		// window size in pixels, including title bar and frame
@@ -150,13 +174,17 @@ func SetCosoleWinsize(pid, w, h int) {
 			log.Printf("Now window (normal rectangle) size is %dx%d, aborting", now_w_px, now_h_px)
 			return
 		}
+		log.Printf("Current window (normal rectangle, including frames) is %dx%d (pixels)",
+			now_w_px, now_h_px)
 		// calculate extra width and height
 		ConsoleExtraHeight = now_h_px - default_h_px
 		ConsoleExtraWidth = now_w_px - default_w_px
 		if ConsoleExtraWidth <= 0 || ConsoleExtraHeight <= 0 {
-			log.Printf("Extra width %d, extra height %d, aborting", ConsoleExtraWidth, ConsoleExtraHeight)
+			log.Printf("Extra width %d pixels, extra height %d pixels, aborting", ConsoleExtraWidth, ConsoleExtraHeight)
 			return
 		}
+		log.Printf("Frame (excluding window content) is %d(w), %d(h) (pixels)",
+			ConsoleExtraWidth, ConsoleExtraHeight)
 
 	}
 	w_px = w_px + ConsoleExtraWidth
@@ -164,26 +192,54 @@ func SetCosoleWinsize(pid, w, h int) {
 
 	// set window size in pixels
 	if w32.SetWindowPos(whandle, whandle, 0, 0, w_px, h_px, w32.SWP_NOMOVE|w32.SWP_NOZORDER) {
-		log.Printf("Window (0x%x) of %d has been resized to %dx%d (chars) or %dx%d (pixels)",
+		log.Printf("Window (0x%x) of %d is being resized to %dx%d (chars) or %dx%d (pixels)",
 			whandle, pid, w, h, w_px, h_px)
+	}
+
+	// check window size
+	now_rect := w32.GetWindowRect(whandle)
+	now_w_px := int(now_rect.Width())
+	now_h_px := int(now_rect.Height())
+	if now_w_px != w_px || now_h_px != h_px {
+		log.Printf("Resizing failed, actual window size is now %dx%d pixels", now_w_px, now_h_px)
 	}
 }
 
-func SetConsoleBufferSize(pid, w, h int) {
-	coord := w32.COORD{
-		X: int16(w),
-		Y: int16(h),
-	}
-	set_console_buffer_size := Kernel32DLL.NewProc("SetConsoleScreenBufferSize")
-	var console_output_handle windows.Handle
+func SetConsoleBufferSize(w, h int) {
+	mod_cmd := fmt.Sprintf("mode con:cols=%d lines=%d", w, h)
 
-	// TODO obtain handle of console buffer output
-
-	_, _, err := set_console_buffer_size.Call(
-		uintptr(unsafe.Pointer(&console_output_handle)),
-		uintptr(unsafe.Pointer(&coord)))
-
+	cmd := exec.Command("cmd.exe", "/C", mod_cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("SetConsoleBufferSize failed: %v", err)
+		log.Printf("SetConsoleBufferSize: %s, %v", out, err)
+		return
 	}
+	log.Printf("SetConsoleBufferSize: set buffer size to %dx%d", w, h)
+}
+
+func AutoSetConsoleBufferSize() {
+	size := os.Getenv("TERM_SIZE")
+	if size == "" {
+		log.Printf("AutoSetConsoleBufferSize: no size specified")
+		return
+	}
+
+	wh := strings.Split(size, "x")
+	if len(wh) < 2 {
+		log.Printf("AutoSetConsoleBufferSize: Incorrect size")
+		return
+	}
+
+	w, err := strconv.Atoi(wh[0])
+	if err != nil {
+		log.Printf("AutoSetConsoleBufferSize: Incorrect width")
+		return
+	}
+	h, err := strconv.Atoi(wh[1])
+	if err != nil {
+		log.Printf("AutoSetConsoleBufferSize: Incorrect height")
+		return
+	}
+
+	SetConsoleBufferSize(w, h)
 }

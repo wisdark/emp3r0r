@@ -6,11 +6,15 @@ import (
 	"encoding/csv"
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/muesli/reflow/wordwrap"
+	"github.com/muesli/reflow/wrap"
 )
 
 // ParseCmd parse commands containing whitespace
@@ -68,22 +72,18 @@ func ReverseString(s string) string {
 
 // Split long lines
 func SplitLongLine(line string, linelen int) (ret string) {
-	if len(line) < linelen {
-		return line
-	}
-	ret = line[:linelen]
+	ret = wordwrap.String(line, linelen)
 
-	temp := ""
-	for n, c := range line[linelen:] {
-		if n >= linelen && n%linelen == 0 {
-			ret = fmt.Sprintf("%s\n%s", ret, temp)
-			temp = ""
+	// if any of the wrapped lines are still too long
+	// use unconditional wrap
+	lines := strings.Split(ret, "\n")
+	for _, wline := range lines {
+		line_len := len(wline)
+		if line_len > linelen {
+			ret = wrap.String(line, linelen)
+			break
 		}
-		temp += string(c)
 	}
-	ret = fmt.Sprintf("%s\n%s", ret, temp)
-	temp = ""
-
 	return
 }
 
@@ -112,7 +112,7 @@ func RandInt(min, max int) int {
 // RandStr random string
 func RandStr(n int) string {
 	var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-	rand.Seed(int64(RandInt(0xff, 0xffffffff)))
+	rand.Seed(int64(RandInt(0xff, math.MaxInt)))
 	b := make([]rune, n)
 	for i := range b {
 		b[i] = letters[int64(RandInt(0, len(letters)))]
@@ -129,7 +129,7 @@ func RandBytes(n int) []byte {
 		}
 		all_bytes = append(all_bytes, byte(b))
 	}
-	rand.Seed(int64(RandInt(0xff, 0xffffffff)))
+	rand.Seed(int64(RandInt(0xff, math.MaxInt)))
 	rand_bytes := make([]byte, n)
 	for i := range rand_bytes {
 		rand_bytes[i] = all_bytes[int64(RandInt(0, len(all_bytes)))]
@@ -144,4 +144,18 @@ func HexEncode(s string) (result string) {
 		result = fmt.Sprintf("%s\\x%x", result, c)
 	}
 	return
+}
+
+func LogFilePrintf(filepath, format string, v ...any) {
+	logf, err := os.OpenFile(filepath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+	defer logf.Close()
+	if err != nil {
+		log.Printf("LogFilePrintf: %v", err)
+		return
+	}
+	log.Printf(format, v...)
+
+	fmt.Fprintf(logf, "%v\n", time.Now().String())
+	fmt.Fprintf(logf, format, v...)
+	fmt.Fprintf(logf, "\n")
 }

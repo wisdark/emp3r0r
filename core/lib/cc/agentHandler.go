@@ -1,4 +1,8 @@
+//go:build linux
+// +build linux
+
 package cc
+
 
 import (
 	"encoding/json"
@@ -23,6 +27,8 @@ var CmdResultsMutex = &sync.Mutex{}
 
 // processAgentData deal with data from agent side
 func processAgentData(data *emp3r0r_data.MsgTunData) {
+	TargetsMutex.RLock()
+	defer TargetsMutex.RUnlock()
 	payloadSplit := strings.Split(data.Payload, emp3r0r_data.MagicString)
 	op := payloadSplit[0]
 
@@ -44,6 +50,8 @@ func processAgentData(data *emp3r0r_data.MsgTunData) {
 	out := strings.Join(payloadSplit[2:len(payloadSplit)-1], " ")
 	// outLines := strings.Split(out, "\n")
 
+	is_builtin_cmd := strings.HasPrefix(cmd, "!")
+
 	// time spent on this cmd
 	cmd_id := payloadSplit[len(payloadSplit)-1]
 	// cache this cmd response
@@ -55,7 +63,11 @@ func processAgentData(data *emp3r0r_data.MsgTunData) {
 		CliPrintWarning("Parsing timestamp '%s': %v", CmdTime[cmd_id], err)
 	} else {
 		time_spent := time.Since(start_time)
-		CliPrintInfo("Command %s took %s", strconv.Quote(cmd), time_spent)
+		if is_builtin_cmd {
+			CliPrintDebug("Command %s took %s", strconv.Quote(cmd), time_spent)
+		} else {
+			CliPrintInfo("Command %s took %s", strconv.Quote(cmd), time_spent)
+		}
 	}
 
 	// headless mode
@@ -189,10 +201,18 @@ func processAgentData(data *emp3r0r_data.MsgTunData) {
 	}
 
 	// Command output
+	is_critical := strings.Contains(out, "Error") ||
+		strings.Contains(out, "Warning")
+	if DebugLevel < 3 && !is_critical {
+		// ignore some cmds
+		if strings.HasPrefix(cmd, "!port_fwd") ||
+			strings.HasPrefix(cmd, "!sshd") {
+			return
+		}
+	}
 	AgentOutputPane.Printf(false,
 		"\n[%s] %s:\n%s\n\n",
 		color.CyanString("%d", contrlIf.Index),
 		color.HiMagentaString(cmd),
 		color.HiWhiteString(out))
-
 }

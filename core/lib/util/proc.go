@@ -73,8 +73,8 @@ func ProcessList() (list []ProcEntry) {
 	return
 }
 
-// ProcExe read exe path of a process
-func ProcExe(pid int) string {
+// ProcExePath read exe path of a process
+func ProcExePath(pid int) string {
 	proc, err := process.NewProcess(int32(pid))
 	if err != nil || proc == nil {
 		log.Printf("No such process (%d): %v", pid, err)
@@ -86,6 +86,20 @@ func ProcExe(pid int) string {
 	}
 	exe = strings.Fields(exe)[0] // get rid of other stuff
 	return exe
+}
+
+// ProcCwd read cwd path of a process
+func ProcCwd(pid int) string {
+	proc, err := process.NewProcess(int32(pid))
+	if err != nil || proc == nil {
+		log.Printf("No such process (%d): %v", pid, err)
+		return "dead_process"
+	}
+	cwd, err := proc.Cwd()
+	if err != nil {
+		return fmt.Sprintf("err_%v", err)
+	}
+	return cwd
 }
 
 // ProcCmdline read cmdline data of a process
@@ -103,14 +117,14 @@ func ProcCmdline(pid int) string {
 	return cmdline
 }
 
-// IsPIDAlive check if a process name exists, returns its process(es)
+// IsPIDAlive check if a PID exists
 func IsPIDAlive(pid int) (alive bool) {
 	alive, err := process.PidExists(int32(pid))
 	if err != nil {
 		log.Printf("IsPIDAlive: %v", err)
 		return false
 	}
-	return
+	return alive
 }
 
 // IsProcAlive check if a process name exists, returns its process(es)
@@ -157,14 +171,48 @@ func PidOf(name string) []int {
 	return pids
 }
 
+// Get children processes of a process
+func GetChildren(pid int) (children []int, err error) {
+	d, err := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
+	if err != nil {
+		log.Printf("GetChildren: %v", err)
+		return
+	}
+	threads := make([]int, 0)
+	for _, thread := range d {
+		tid, err := strconv.Atoi(thread.Name())
+		if err != nil {
+			continue
+		}
+		threads = append(threads, tid)
+	}
+	for _, tid := range threads {
+		children_file := fmt.Sprintf("/proc/%d/task/%d/children", pid, tid)
+		data, err := os.ReadFile(children_file)
+		if err != nil {
+			log.Printf("GetChildren: %v", err)
+			return nil, err
+		}
+		children_str := strings.Fields(strings.TrimSpace(string(data)))
+		for _, child := range children_str {
+			child_pid, err := strconv.Atoi(child)
+			if err != nil {
+				continue
+			}
+			children = append(children, child_pid)
+		}
+	}
+	return
+}
+
 // sleep for a random interval between 120ms to 1min
 func TakeASnap() {
 	interval := time.Duration(RandInt(120, 60000))
 	time.Sleep(interval * time.Millisecond)
 }
 
-// sleep for a random interval between 120ms to 2s
+// sleep for a random interval between 5ms to 100ms
 func TakeABlink() {
-	interval := time.Duration(RandInt(120, 2000))
+	interval := time.Duration(RandInt(5, 100))
 	time.Sleep(interval * time.Millisecond)
 }
