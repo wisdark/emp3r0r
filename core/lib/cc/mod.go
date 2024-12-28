@@ -60,6 +60,7 @@ var (
 		emp3r0r_data.ModBring2CC:     moduleBring2CC,
 		emp3r0r_data.ModGDB:          moduleGDB,
 		emp3r0r_data.ModStager:       modStager,
+		emp3r0r_data.ModListener:     modListener,
 		emp3r0r_data.ModSSHHarvester: module_ssh_harvester,
 	}
 )
@@ -67,6 +68,10 @@ var (
 // SetOption set an option to value, `set` command
 func SetOption(args []string) {
 	opt := args[0]
+	if _, exist := Options[opt]; !exist {
+		CliPrintError("No such option: %s", strconv.Quote(opt))
+		return
+	}
 	if len(args) < 2 {
 		// clear value
 		Options[opt].Val = ""
@@ -74,11 +79,6 @@ func SetOption(args []string) {
 	}
 
 	val := args[1:] // in case val contains spaces
-
-	if _, exist := Options[opt]; !exist {
-		CliPrintError("No such option: %s", strconv.Quote(opt))
-		return
-	}
 
 	// set
 	Options[opt].Val = strings.Join(val, " ")
@@ -240,7 +240,7 @@ func UpdateOptions(modName string) (exist bool) {
 		cdn_proxy.Val = read_cached_config("cdn_proxy").(string)
 		// shadowsocks switch
 		shadowsocks := addIfNotFound("shadowsocks")
-		shadowsocks.Vals = []string{"on", "off", "with_kcp"}
+		shadowsocks.Vals = []string{"on", "off", "bare"}
 		shadowsocks.Val = "off"
 		// agent proxy for c2 transport
 		c2transport_proxy := addIfNotFound("c2transport_proxy")
@@ -257,6 +257,20 @@ func UpdateOptions(modName string) (exist bool) {
 		auto_proxy := addIfNotFound("auto_proxy")
 		auto_proxy.Vals = []string{"on", "off"}
 		auto_proxy.Val = "off"
+
+	case modName == emp3r0r_data.ModListener:
+		listenerOpt := addIfNotFound("listener")
+		listenerOpt.Vals = []string{"http_aes_compressed", "http_bare"}
+		listenerOpt.Val = "http_aes_compressed"
+		portOpt := addIfNotFound("port")
+		portOpt.Val = "8080"
+		payloadOpt := addIfNotFound("payload")
+		payloadOpt.Val = "emp3r0r"
+		compressionOpt := addIfNotFound("compression")
+		compressionOpt.Vals = []string{"on", "off"}
+		compressionOpt.Val = "on"
+		passphraseOpt := addIfNotFound("passphrase")
+		passphraseOpt.Val = "my_secret_key"
 
 	default:
 		// custom modules

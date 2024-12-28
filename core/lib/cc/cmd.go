@@ -61,15 +61,16 @@ var CmdFuncs = map[string]func(){
 var CmdFuncsWithArgs = map[string]func(string){
 	"ls":              FSNoArgCmd,
 	"pwd":             FSNoArgCmd,
-	"cd":              FSSingleArgCmd,
-	"mv":              FSDoubleArgCmd,
-	"cp":              FSDoubleArgCmd,
-	"rm":              FSSingleArgCmd,
-	"mkdir":           FSSingleArgCmd,
+	"cd":              FSCmdDst,
+	"rm":              FSCmdDst,
+	"mkdir":           FSCmdDst,
+	"mv":              FSCmdSrcDst,
+	"cp":              FSCmdSrcDst,
 	"put":             UploadToAgent,
 	"get":             DownloadFromAgent,
 	"ps":              FSNoArgCmd,
-	"kill":            FSSingleArgCmd,
+	"net_helper":      FSNoArgCmd,
+	"kill":            FSCmdDst,
 	"delete_port_fwd": DeletePortFwdSession,
 	"debug":           setDebugLevel,
 	"search":          ModuleSearch,
@@ -79,15 +80,17 @@ var CmdFuncsWithArgs = map[string]func(string){
 }
 
 // CmdTime Record the time spent on each command
-var CmdTime = make(map[string]string)
-var CmdTimeMutex = &sync.Mutex{}
+var (
+	CmdTime      = make(map[string]string)
+	CmdTimeMutex = &sync.Mutex{}
+)
 
 const HELP = "help" // fuck goconst
 
 // CmdHandler processes user commands
 func CmdHandler(cmd string) (err error) {
 	cmdSplit := util.ParseCmd(cmd)
-	if len(cmdSplit) < 0 {
+	if len(cmdSplit) == 0 {
 		return
 	}
 
@@ -107,7 +110,7 @@ func CmdHandler(cmd string) (err error) {
 
 	case cmdSplit[0] == "use":
 		if len(cmdSplit) != 2 {
-			CliPrintError("use what? " + strconv.Quote(cmd))
+			CliPrintError("use what? %s", strconv.Quote(cmd))
 			return
 		}
 		defer SetDynamicPrompt()
@@ -183,7 +186,7 @@ func CmdHelp(mod string) {
 func setCurrentTarget(cmd string) {
 	cmdSplit := strings.Fields(cmd)
 	if len(cmdSplit) != 2 {
-		CliPrintError("set target to what? " + strconv.Quote(cmd))
+		CliPrintError("set target to what? %s", strconv.Quote(cmd))
 		return
 	}
 	defer SetDynamicPrompt()
@@ -222,14 +225,7 @@ func setCurrentTarget(cmd string) {
 			AgentShellPane = nil
 		}
 
-		// open a shell
-		CliPrintInfo("Please `use interactive_shell` to open an shell")
-		CliPrintInfo("Opening SFTP pane")
-		err = SSHClient("sftp", "", RuntimeConfig.SSHDShellPort, true)
-		if err != nil {
-			CliPrintError("SFTPClient: %v", err)
-		}
-
+		CliPrint("Run `file_manager` to open a SFTP session")
 		updateAgentExes(target_to_set)
 	}
 

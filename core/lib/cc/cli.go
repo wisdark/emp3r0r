@@ -51,6 +51,23 @@ var (
 
 // CliMain launches the commandline UI
 func CliMain() {
+	// print banner
+	err = CliBanner()
+	if err != nil {
+		CliFatalError("Banner: %v", err)
+	} else {
+		// start all services
+		go TLSServer()
+		go ShadowsocksServer()
+		go InitModules()
+	}
+
+	// unlock incomplete downloads
+	err = UnlockDownloads()
+	if err != nil {
+		CliPrintWarning("UnlockDownloads: %v", err)
+	}
+
 	// completer
 	CmdCompls = []readline.PrefixCompleterInterface{
 		readline.PcItem("set",
@@ -157,14 +174,14 @@ func CliMain() {
 start:
 	SetDynamicPrompt()
 	for {
-		line, err := EmpReadLine.Readline()
-		if err == readline.ErrInterrupt {
+		line, readlineErr := EmpReadLine.Readline()
+		if readlineErr == readline.ErrInterrupt {
 			if len(line) == 0 {
 				break
 			} else {
 				continue
 			}
-		} else if err == io.EOF {
+		} else if readlineErr == io.EOF {
 			break
 		}
 
@@ -182,9 +199,9 @@ start:
 
 		// process other commands
 		default:
-			err = CmdHandler(line)
-			if err != nil {
-				color.Red(err.Error())
+			readlineErr = CmdHandler(line)
+			if readlineErr != nil {
+				color.Red(readlineErr.Error())
 			}
 		}
 		fmt.Printf("\n")
@@ -219,215 +236,84 @@ func SetDynamicPrompt() {
 	EmpReadLine.SetPrompt(dynamicPrompt)
 }
 
-// CliPrintDebug print log in blue
+func cliPrintHelper(format string, a []interface{}, colorAttr color.Attribute, logPrefix string, alert bool) {
+	msgColor := color.New(colorAttr)
+	if logPrefix == "ERROR" || logPrefix == "ALERT" || logPrefix == "SUCCESS" {
+		msgColor = color.New(colorAttr, color.Bold)
+	}
+	logMsg := msgColor.Sprintf(format, a...)
+	log.Print(logMsg)
+
+	// Save log to file
+	logFile, logOpenErr := os.OpenFile("emp3r0r.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if logOpenErr != nil {
+		log.Printf("cliPrintHelper: %v", logOpenErr)
+		return
+	}
+	defer logFile.Close()
+	logger := log.New(logFile, "", log.LstdFlags)
+	logger.Print(logMsg)
+
+	if IsAPIEnabled {
+		var resp APIResponse
+		msg := GetDateTime() + " " + logPrefix + ": " + fmt.Sprintf(format, a...)
+		resp.MsgData = []byte(msg)
+		resp.Alert = alert
+		resp.MsgType = LOG
+		data, jsonMarshalErr := json.Marshal(resp)
+		if jsonMarshalErr != nil {
+			log.Printf("cliPrintHelper: %v", jsonMarshalErr)
+			return
+		}
+		_, jsonMarshalErr = APIConn.Write([]byte(data))
+		if jsonMarshalErr != nil {
+			log.Printf("cliPrintHelper: %v", jsonMarshalErr)
+		}
+	}
+}
+
 func CliPrintDebug(format string, a ...interface{}) {
 	if DebugLevel >= 3 {
-		log.Println(color.BlueString(format, a...))
-		if IsAPIEnabled {
-			// send to socket
-			var resp APIResponse
-			msg := GetDateTime() + " DEBUG: " + fmt.Sprintf(format, a...)
-			resp.MsgData = []byte(msg)
-			resp.Alert = false
-			resp.MsgType = LOG
-			data, err := json.Marshal(resp)
-			if err != nil {
-				log.Printf("CliPrintDebug: %v", err)
-				return
-			}
-			_, err = APIConn.Write([]byte(data))
-			if err != nil {
-				log.Printf("CliPrintDebug: %v", err)
-			}
-		}
+		cliPrintHelper(format, a, color.FgBlue, "DEBUG", false)
 	}
 }
 
-// CliPrintInfo print log in hiblue
 func CliPrintInfo(format string, a ...interface{}) {
 	if DebugLevel >= 2 {
-		log.Println(color.HiBlueString(format, a...))
-		if IsAPIEnabled {
-			// send to socket
-			var resp APIResponse
-			msg := GetDateTime() + " INFO: " + fmt.Sprintf(format, a...)
-			resp.MsgData = []byte(msg)
-			resp.Alert = false
-			resp.MsgType = LOG
-			data, err := json.Marshal(resp)
-			if err != nil {
-				log.Printf("CliPrintInfo: %v", err)
-				return
-			}
-			_, err = APIConn.Write([]byte(data))
-			if err != nil {
-				log.Printf("CliPrintInfo: %v", err)
-			}
-		}
+		cliPrintHelper(format, a, color.FgHiBlue, "INFO", false)
 	}
 }
 
-// CliPrintWarning print log in hiyellow
 func CliPrintWarning(format string, a ...interface{}) {
 	if DebugLevel >= 1 {
-		log.Println(color.HiYellowString(format, a...))
-		if IsAPIEnabled {
-			// send to socket
-			var resp APIResponse
-			msg := GetDateTime() + " WARN: " + fmt.Sprintf(format, a...)
-			resp.MsgData = []byte(msg)
-			resp.Alert = false
-			resp.MsgType = LOG
-			data, err := json.Marshal(resp)
-			if err != nil {
-				log.Printf("CliPrintWarning: %v", err)
-				return
-			}
-			_, err = APIConn.Write([]byte(data))
-			if err != nil {
-				log.Printf("CliPrintWarning: %v", err)
-			}
-		}
+		cliPrintHelper(format, a, color.FgHiYellow, "WARN", false)
 	}
 }
 
-// CliPrint print in bold cyan without logging prefix, regardless of debug level
 func CliPrint(format string, a ...interface{}) {
-	msg_color := color.New(color.Bold, color.FgCyan)
-	fmt.Println(msg_color.Sprintf(format, a...))
-	if IsAPIEnabled {
-		// send to socket
-		var resp APIResponse
-		msg := GetDateTime() + " PRINT: " + fmt.Sprintf(format, a...)
-		resp.MsgData = []byte(msg)
-		resp.Alert = false
-		resp.MsgType = LOG
-		data, err := json.Marshal(resp)
-		if err != nil {
-			log.Printf("CliPrint: %v", err)
-			return
-		}
-		_, err = APIConn.Write([]byte(data))
-		if err != nil {
-			log.Printf("CliPrint: %v", err)
-		}
-	}
+	cliPrintHelper(format, a, color.FgCyan, "PRINT", false)
 }
 
-// CliMsg print log in bold cyan, regardless of debug level
 func CliMsg(format string, a ...interface{}) {
-	msg_color := color.New(color.Bold, color.FgCyan)
-	log.Println(msg_color.Sprintf(format, a...))
-	if IsAPIEnabled {
-		// send to socket
-		var resp APIResponse
-		msg := GetDateTime() + " MSG: " + fmt.Sprintf(format, a...)
-		resp.MsgData = []byte(msg)
-		resp.Alert = false
-		resp.MsgType = LOG
-		data, err := json.Marshal(resp)
-		if err != nil {
-			log.Printf("CliMsg: %v", err)
-			return
-		}
-		_, err = APIConn.Write([]byte(data))
-		if err != nil {
-			log.Printf("CliMsg: %v", err)
-		}
-	}
+	cliPrintHelper(format, a, color.FgCyan, "MSG", false)
 }
 
-// CliAlert print log in blinking text
 func CliAlert(textColor color.Attribute, format string, a ...interface{}) {
-	alertColor := color.New(color.Bold, textColor, color.BlinkSlow)
-	log.Print(alertColor.Sprintf(format, a...))
-	if IsAPIEnabled {
-		// send to socket
-		var resp APIResponse
-		msg := GetDateTime() + " ALERT: " + fmt.Sprintf(format, a...)
-		resp.MsgData = []byte(msg)
-		resp.Alert = false
-		resp.MsgType = LOG
-		data, err := json.Marshal(resp)
-		if err != nil {
-			log.Printf("CliAlert: %v", err)
-			return
-		}
-		_, err = APIConn.Write([]byte(data))
-		if err != nil {
-			log.Printf("CliAlert: %v", err)
-		}
-	}
+	cliPrintHelper(format, a, textColor, "ALERT", false)
 }
 
-// CliPrintSuccess print log in green
 func CliPrintSuccess(format string, a ...interface{}) {
-	successColor := color.New(color.Bold, color.FgHiGreen)
-	log.Print(successColor.Sprintf(format, a...))
-	if IsAPIEnabled {
-		// send to socket
-		var resp APIResponse
-		msg := GetDateTime() + " SUCCESS: " + fmt.Sprintf(format, a...)
-		resp.MsgData = []byte(msg)
-		resp.Alert = true
-		resp.MsgType = LOG
-		data, err := json.Marshal(resp)
-		if err != nil {
-			log.Printf("CliPrintSuccess: %v", err)
-			return
-		}
-		_, err = APIConn.Write([]byte(data))
-		if err != nil {
-			log.Printf("CliPrintSuccess: %v", err)
-		}
-	}
+	cliPrintHelper(format, a, color.FgHiGreen, "SUCCESS", true)
 }
 
-// CliFatalError print log in red, and exit
 func CliFatalError(format string, a ...interface{}) {
-	errorColor := color.New(color.Bold, color.FgHiRed)
+	cliPrintHelper(format, a, color.FgHiRed, "ERROR", true)
 	CliMsg("Run 'tmux kill-session -t emp3r0r' to clean up dead emp3r0r windows")
-	log.Fatal(errorColor.Sprintf(format, a...))
-	if IsAPIEnabled {
-		// send to socket
-		var resp APIResponse
-		msg := GetDateTime() + " ERROR: " + fmt.Sprintf(format, a...)
-		resp.MsgData = []byte(msg)
-		resp.Alert = true
-		resp.MsgType = LOG
-		data, err := json.Marshal(resp)
-		if err != nil {
-			log.Printf("CliPrintError: %v", err)
-			return
-		}
-		_, err = APIConn.Write([]byte(data))
-		if err != nil {
-			log.Printf("CliPrintError: %v", err)
-		}
-	}
+	log.Fatal(color.New(color.Bold, color.FgHiRed).Sprintf(format, a...))
 }
 
-// CliPrintError print log in red
 func CliPrintError(format string, a ...interface{}) {
-	errorColor := color.New(color.Bold, color.FgHiRed)
-	log.Print(errorColor.Sprintf(format, a...))
-	if IsAPIEnabled {
-		// send to socket
-		var resp APIResponse
-		msg := GetDateTime() + " ERROR: " + fmt.Sprintf(format, a...)
-		resp.MsgData = []byte(msg)
-		resp.Alert = true
-		resp.MsgType = LOG
-		data, err := json.Marshal(resp)
-		if err != nil {
-			log.Printf("CliPrintError: %v", err)
-			return
-		}
-		_, err = APIConn.Write([]byte(data))
-		if err != nil {
-			log.Printf("CliPrintError: %v", err)
-		}
-	}
+	cliPrintHelper(format, a, color.FgHiRed, "ERROR", true)
 }
 
 // CliAsk prompt for an answer from user
@@ -443,11 +329,10 @@ func CliAsk(prompt string, allow_empty bool) (answer string) {
 
 	defer SetDynamicPrompt()
 
-	var err error
 	for {
-		answer, err = EmpReadLine.Readline()
-		if err != nil {
-			if err == readline.ErrInterrupt || err == io.EOF {
+		answer, readlineErr := EmpReadLine.Readline()
+		if readlineErr != nil {
+			if readlineErr == readline.ErrInterrupt || readlineErr == io.EOF {
 				break
 			}
 		}
@@ -473,12 +358,12 @@ func CliYesNo(prompt string) bool {
 
 	defer SetDynamicPrompt()
 
-	answer, err := EmpReadLine.Readline()
-	if err != nil {
-		if err == readline.ErrInterrupt || err == io.EOF {
+	answer, readlineErr := EmpReadLine.Readline()
+	if readlineErr != nil {
+		if readlineErr == readline.ErrInterrupt || readlineErr == io.EOF {
 			return false
 		}
-		color.Red(err.Error())
+		color.Red(readlineErr.Error())
 	}
 
 	answer = strings.ToLower(answer)
@@ -487,20 +372,31 @@ func CliYesNo(prompt string) bool {
 
 // CliListOptions list currently available options for `set`
 func CliListOptions() {
+	if CurrentMod == "none" {
+		CliPrintWarning("No module selected")
+		return
+	}
 	TargetsMutex.RLock()
 	defer TargetsMutex.RUnlock()
 	opts := make(map[string]string)
+
 	opts["module"] = CurrentMod
-	_, exist := Targets[CurrentTarget]
-	if exist {
-		shortName := strings.Split(CurrentTarget.Tag, "-agent")[0]
-		opts["target"] = shortName
+	if CurrentTarget != nil {
+		_, exist := Targets[CurrentTarget]
+		if exist {
+			shortName := strings.Split(CurrentTarget.Tag, "-agent")[0]
+			opts["target"] = shortName
+		} else {
+			opts["target"] = "<blank>"
+		}
 	} else {
 		opts["target"] = "<blank>"
 	}
 
 	for k, v := range Options {
-		opts[k] = v.Val
+		if v != nil {
+			opts[k] = v.Val
+		}
 	}
 
 	// build table
@@ -539,9 +435,11 @@ func CliListOptions() {
 		}
 
 		tdata = append(tdata,
-			[]string{util.SplitLongLine(k, 20),
+			[]string{
+				util.SplitLongLine(k, 20),
 				util.SplitLongLine(help, 20),
-				util.SplitLongLine(v, 20)})
+				util.SplitLongLine(v, 20),
+			})
 	}
 	table.AppendBulk(tdata)
 	table.Render()
@@ -552,36 +450,41 @@ func CliListOptions() {
 
 // CliListCmds list all commands in tree format
 func CliListCmds(w io.Writer) {
-	_, err := io.WriteString(w, "Commands:\n")
-	if err != nil {
+	_, ioErr := io.WriteString(w, "Commands:\n")
+	if ioErr != nil {
 		return
 	}
-	_, err = io.WriteString(w, CliCompleter.Tree("    "))
-	if err != nil {
+	_, ioErr = io.WriteString(w, CliCompleter.Tree("    "))
+	if ioErr != nil {
 		return
 	}
 }
 
 // CliBanner prints banner
 func CliBanner() error {
-	data, err := base64.StdEncoding.DecodeString(cliBannerB64)
-	if err != nil {
-		return errors.New("Failed to print banner: " + err.Error())
+	data, encodingErr := base64.StdEncoding.DecodeString(cliBannerB64)
+	if encodingErr != nil {
+		return errors.New("failed to print banner: " + encodingErr.Error())
 	}
 
-	color.Cyan(string(data))
-	cow, err := cowsay.New(
-		cowsay.BallonWidth(40),
+	// print banner line by line
+	banner := strings.Split(string(data), "\n")
+	for _, line := range banner {
+		color.Cyan(line)
+		util.TakeABlink()
+	}
+	cow, encodingErr := cowsay.New(
+		cowsay.BallonWidth(100),
 		cowsay.Random(),
 	)
-	if err != nil {
-		log.Fatalf("CowSay: %v", err)
+	if encodingErr != nil {
+		log.Fatalf("CowSay: %v", encodingErr)
 	}
 
 	// C2 names
-	err = LoadCACrt()
-	if err != nil {
-		CliPrintWarning("Failed to parse CA cert: %v", err)
+	encodingErr = LoadCACrt()
+	if encodingErr != nil {
+		CliPrintWarning("Failed to parse CA cert: %v", encodingErr)
 	}
 	c2_names := tun.NamesInCert(ServerCrtFile)
 	if len(c2_names) <= 0 {
@@ -589,7 +492,7 @@ func CliBanner() error {
 	}
 	name_list := strings.Join(c2_names, ", ")
 
-	say, err := cow.Say(fmt.Sprintf("welcome! you are using version %s,\n"+
+	say, encodingErr := cow.Say(fmt.Sprintf("welcome! you are using version %s,\n"+
 		"C2 listening on *:%s,\n"+
 		"Shadowsocks port *:%s,\n"+
 		"KCP port *:%s,\n"+
@@ -601,10 +504,11 @@ func CliBanner() error {
 		RuntimeConfig.KCPPort,
 		name_list,
 		RuntimeConfig.CAFingerprint))
-	if err != nil {
-		log.Fatalf("CowSay: %v", err)
+	if encodingErr != nil {
+		log.Fatalf("CowSay: %v", encodingErr)
 	}
 	color.Cyan("%s\n\n", say)
+	util.TakeABlink()
 	return nil
 }
 
@@ -613,20 +517,20 @@ func CliPrettyPrint(header1, header2 string, map2write *map[string]string) {
 	if IsAPIEnabled {
 		// send to socket
 		var resp APIResponse
-		msg, err := json.Marshal(map2write)
-		if err != nil {
-			log.Printf("CliPrettyPrint: %v", err)
+		msg, marshalErr := json.Marshal(map2write)
+		if marshalErr != nil {
+			log.Printf("CliPrettyPrint: %v", marshalErr)
 		}
 		resp.MsgData = msg
 		resp.Alert = false
 		resp.MsgType = JSON
-		data, err := json.Marshal(resp)
-		if err != nil {
-			log.Printf("CliPrettyPrint: %v", err)
+		data, marshalErr := json.Marshal(resp)
+		if marshalErr != nil {
+			log.Printf("CliPrettyPrint: %v", marshalErr)
 		}
-		_, err = APIConn.Write([]byte(data))
-		if err != nil {
-			log.Printf("CliPrettyPrint: %v", err)
+		_, marshalErr = APIConn.Write([]byte(data))
+		if marshalErr != nil {
+			log.Printf("CliPrettyPrint: %v", marshalErr)
 		}
 	}
 
@@ -840,9 +744,9 @@ func CopyToClipboard(data []byte) {
 		CliPrintWarning("%s not installed", exe)
 		return
 	}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		CliPrintWarning("CopyToClipboard read stdin: %v", err)
+	stdin, stdinErr := cmd.StdinPipe()
+	if stdinErr != nil {
+		CliPrintWarning("CopyToClipboard read stdin: %v", stdinErr)
 		return
 	}
 	go func() {
@@ -850,9 +754,9 @@ func CopyToClipboard(data []byte) {
 		_, _ = stdin.Write(data)
 	}()
 
-	err = cmd.Run()
-	if err != nil {
-		CliPrintWarning("CopyToClipboard: %v", err)
+	stdinErr = cmd.Run()
+	if stdinErr != nil {
+		CliPrintWarning("CopyToClipboard: %v", stdinErr)
 	}
 	CliPrintInfo("Copied to clipboard")
 }

@@ -65,7 +65,7 @@ const (
 
 	// Version hardcoded version string
 	// see https://github.com/googleapis/release-please/blob/f398bdffdae69772c61a82cd7158cca3478c2110/src/updaters/generic.ts#L30
-	Version = "v1.37.1" // x-release-please-version
+	Version = "v1.42.1" // x-release-please-version
 
 	// RShellBufSize buffer size of reverse shell stream
 	RShellBufSize = 128
@@ -93,6 +93,7 @@ const (
 	ModBring2CC     = "bring2cc"
 	ModGDB          = "gdbserver"
 	ModStager       = "stager"
+	ModListener     = "listener"
 	ModSSHHarvester = "ssh_harvester"
 )
 
@@ -110,21 +111,22 @@ var InjectorMethods = map[string]string{
 
 // Module help info, ls_modules shows this
 var ModuleComments = map[string]string{
-	ModGenAgent:     "Build agent for different OS/arch with customized options",
-	ModCMD_EXEC:     "Run a single command on a target",
+	ModGenAgent:     "Build agent for different OS/arch with customized options, will generate executables w/wo UPX packed, shellcode (Windows), or shared library (Linux)",
+	ModCMD_EXEC:     "Run a single command on one or more targets",
 	ModCLEAN_LOG:    "Delete lines containing keyword from *tmp logs",
 	ModLPE_SUGGEST:  "Run linux-smart-enumeration or linux exploit suggester",
-	ModPERSISTENCE:  "Get persistence via built-in methods",
+	ModPERSISTENCE:  "Get persistence via built-in methods (use with caution, choose one method that suits the target)",
 	ModPROXY:        "Start a socks proxy on target host, and use it locally on C2 side, so you can access network resources on agent side",
 	ModPORT_FWD:     "Port mapping from agent to CC (or vice versa), via HTTP2 (or other) tunnel",
-	ModSHELL:        "Run custom bash on target, a perfect reverse shell",
+	ModSHELL:        "Bring your own shell program to run on target, or run the existing shell program (BAD OPSEC, please use custom shells)",
 	ModVACCINE:      "Vaccine helps you install additional tools on target system",
 	ModINJECTOR:     "Inject shellcode/loader.so into a running process",
 	ModGET_ROOT:     "Try some built-in LPE exploits",
-	ModBring2CC:     "Bring a target host to CC by connecting to it first (target host must have agent installed)",
+	ModBring2CC:     "Bring arbitrary agent to CC (through current target), useful when agent is unable to connect to CC directly",
 	ModGDB:          "Remote gdbserver, debug anything",
-	ModStager:       "Generate a stager for staged payload delivering",
-	ModSSHHarvester: "Harvest cleartext password automatically from OpenSSH server process",
+	ModStager:       "Generate a stager for staged payload delivering (BAD OPSEC, please use custom stagers with shellcode agent in Windows and shared library in Linux)",
+	ModSSHHarvester: "Harvest clear-text password automatically from OpenSSH server process",
+	ModListener:     "Start a listener to serve stagers or regular files, useful when you have a foothold on a machine and want to deliver a payload to other targets in the same network",
 }
 
 // Module help for options, does not include every module since not all modules need args
@@ -182,6 +184,11 @@ var ModuleHelp = map[string]map[string]string{
 		"type":       "Stager format, eg. bash script",
 		"agent_path": "Path to the agent binary that will be downloaded and executed on target hosts",
 	},
+	ModListener: {
+		"payload":  "The payload to serve, eg. ./stager",
+		"listener": "Listener type, eg. http_bare, http_aes_compressed",
+		"port":     "Port to listen on, eg. 8080",
+	},
 }
 
 // C2Commands
@@ -201,6 +208,7 @@ const (
 	C2CmdLPE           = "!lpe"
 	C2CmdBring2CC      = "!" + ModBring2CC
 	C2CmdStat          = "!stat"
+	C2CmdListener      = "!listener"
 )
 
 // AgentSystemInfo agent properties
@@ -251,4 +259,107 @@ type H2Conn struct {
 	Conn   *h2conn.Conn
 	Ctx    context.Context
 	Cancel context.CancelFunc
+}
+
+var CommonFilenames = []string{"monthlybanner",
+	"is",
+	"calendar",
+	"close",
+	"shared",
+	"index",
+	"auto",
+	"notify",
+	"status",
+	"announcements",
+	"v2",
+	"apr",
+	"entertainment",
+	"government",
+	"func",
+	"ofbiz",
+	"cgi-sys",
+	"l",
+	"events",
+	"party",
+	"code",
+	"exchange",
+	"wysiwyg",
+	"java-plugin",
+	"compliance",
+	"pipe",
+	"var",
+	"font",
+	"shopper",
+	"a",
+	"de",
+	"word",
+	"bb",
+	"LICENSE",
+	"sp",
+	"webdav",
+	"post",
+	"promo",
+	"certificate",
+	"robots",
+	"MANIFEST.MF",
+	"health",
+	"urls",
+	"appl",
+	"openjpa",
+	"int",
+	"todo",
+	"staticpages",
+	"deleted",
+	"6",
+	"opinion",
+	"lg",
+	"x",
+	"staging",
+	"isapi",
+	"newticket",
+	"~test",
+	"google",
+	"edp",
+	"2",
+	"~logs",
+	"fuckoff",
+	"keep",
+	"cmd",
+	"crons",
+	"large",
+	"students",
+	"pool",
+	"text",
+	"vector",
+	"thumbs",
+	"tests",
+	"overview",
+	"posts",
+	"webstats",
+	"performance",
+	"viewsource",
+	"known_hosts",
+	"topics",
+	"gprs",
+	"crossdomain",
+	"2000",
+	"presentation",
+	"ssh",
+	"conferences",
+	".htpasswd",
+	"Documents",
+	"unreg",
+	"query",
+	"dialogs",
+	"~bin",
+	"wwwthreads",
+	"reg",
+	"_vti_bin",
+	"8",
+	"tpl",
+	"wap",
+	".passwd",
+	"hacking",
+	"1997",
+	"configs",
 }

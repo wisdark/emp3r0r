@@ -30,7 +30,7 @@ func GetSymFromLibc(pid int, sym string) (addr int64, err error) {
 		return
 	}
 	defer elf_file.Close()
-	syms, err := elf_file.Symbols()
+	syms, err := elf_file.DynamicSymbols()
 	if err != nil {
 		err = fmt.Errorf("ELF symbols: %v", err)
 		return
@@ -118,7 +118,7 @@ func IsELF(file string) bool {
 	return true
 }
 
-// FixELF: Replace ld and add rpath
+// FixELF: Replace ld and add rpath to use musl libc
 func FixELF(elf_path string) (err error) {
 	pwd, _ := os.Getwd()
 	err = os.Chdir(RuntimeConfig.UtilsPath)

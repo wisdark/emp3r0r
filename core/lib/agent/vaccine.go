@@ -15,7 +15,6 @@ import (
 
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
-	"github.com/mholt/archiver/v3"
 )
 
 func VaccineHandler() (out string) {
@@ -23,9 +22,9 @@ func VaccineHandler() (out string) {
 		return "Only supported in Linux"
 	}
 
+	const UtilsArchive = "utils.tar.xz"
+
 	var (
-		UtilsArchive  = "utils.tar.xz"
-		LibPath       = RuntimeConfig.UtilsPath + "/lib"
 		PythonArchive = RuntimeConfig.UtilsPath + "/python3.tar.xz"
 		PythonLib     = RuntimeConfig.UtilsPath + "/python3.11"
 		PythonPath    = fmt.Sprintf("%s:%s:%s", PythonLib, PythonLib+"/lib-dynload", PythonLib+"/site-packages")
@@ -52,26 +51,19 @@ func VaccineHandler() (out string) {
 	defer os.Remove(RuntimeConfig.AgentRoot + "/" + UtilsArchive)
 
 	// unpack utils.tar.xz to our PATH
-	os.RemoveAll(RuntimeConfig.UtilsPath) // archiver fucking aborts when files already exist
-	if !util.IsExist(RuntimeConfig.UtilsPath) {
-		if err = os.MkdirAll(RuntimeConfig.UtilsPath, 0700); err != nil {
-			log.Print(err)
-			return fmt.Sprintf("mkdir: %v", err)
-		}
-	}
-
-	if err = archiver.Unarchive(RuntimeConfig.AgentRoot+"/"+UtilsArchive,
-		RuntimeConfig.UtilsPath); err != nil {
+	extractPath := RuntimeConfig.UtilsPath
+	if err = util.Unarchive(RuntimeConfig.AgentRoot+"/"+UtilsArchive, extractPath); err != nil {
 		log.Printf("Unarchive: %v", err)
 		return fmt.Sprintf("Unarchive: %v", err)
 	}
+	log.Printf("%s extracted", UtilsArchive)
 
 	// libs
-	os.RemoveAll(LibPath) // archiver fucking aborts when files already exist
-	if err = archiver.Unarchive(RuntimeConfig.UtilsPath+"/libs.tar.xz",
+	if err = util.Unarchive(RuntimeConfig.UtilsPath+"/libs.tar.xz",
 		RuntimeConfig.UtilsPath); err != nil {
 		log.Printf("Unarchive: %v", err)
 		out = fmt.Sprintf("Unarchive libs: %v", err)
+		return
 	}
 	log.Println("Libs configured")
 	defer os.Remove(RuntimeConfig.UtilsPath + "/libs.tar.xz")
@@ -80,15 +72,15 @@ func VaccineHandler() (out string) {
 	log.Printf("Pre-set Python environment: %s, %s, %s", PythonArchive, PythonLib, PythonPath)
 	os.RemoveAll(PythonLib)
 	log.Printf("Found python archive at %s, trying to configure", PythonArchive)
-	if err = archiver.Unarchive(PythonArchive, RuntimeConfig.UtilsPath); err != nil {
+	defer os.Remove(PythonArchive)
+	if err = util.Unarchive(PythonArchive, RuntimeConfig.UtilsPath); err != nil {
 		out = fmt.Sprintf("Unarchive python libs: %v", err)
 		log.Print(out)
 		return
 	}
-	defer os.Remove(PythonArchive)
 
 	// create launchers
-	err = os.WriteFile(RuntimeConfig.UtilsPath+"/python", []byte(PythonLauncher), 0755)
+	err = os.WriteFile(RuntimeConfig.UtilsPath+"/python", []byte(PythonLauncher), 0o755)
 	if err != nil {
 		out = fmt.Sprintf("Write python launcher: %v", err)
 	}

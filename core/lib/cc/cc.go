@@ -24,6 +24,9 @@ var (
 	// 3 (DEBUG) -> 2 (INFO) -> 1 (WARN)
 	DebugLevel = 2
 
+	// TmuxPersistence enable debug (-debug)
+	TmuxPersistence = false
+
 	// IsAPIEnabled Indicate whether we are in headless mode
 	IsAPIEnabled = false
 
@@ -107,8 +110,8 @@ func ListTargets() {
 	defer TargetsMutex.RUnlock()
 	// return JSON data to APIConn in headless mode
 	if IsAPIEnabled {
-		if err := headlessListTargets(); err != nil {
-			CliPrintError("ls_targets: %v", err)
+		if listErr := headlessListTargets(); listErr != nil {
+			CliPrintError("ls_targets: %v", listErr)
 		}
 	}
 
@@ -170,15 +173,19 @@ func ListTargets() {
 			"IPs":     ips,
 		}
 
-		var row = []string{index, label, util.SplitLongLine(target.Tag, 15),
-			infoMap["OS"], infoMap["Process"], infoMap["User"], infoMap["IPs"], infoMap["From"]}
+		row := []string{
+			index, label, util.SplitLongLine(target.Tag, 15),
+			infoMap["OS"], infoMap["Process"], infoMap["User"], infoMap["IPs"], infoMap["From"],
+		}
 
 		// is this agent currently selected?
 		if CurrentTarget != nil {
 			if CurrentTarget.Tag == target.Tag {
 				index = color.New(color.FgHiGreen, color.Bold).Sprintf("%d", control.Index)
-				row = []string{index, label, util.SplitLongLine(target.Tag, 15),
-					infoMap["OS"], infoMap["Process"], infoMap["User"], infoMap["IPs"], infoMap["From"]}
+				row = []string{
+					index, label, util.SplitLongLine(target.Tag, 15),
+					infoMap["OS"], infoMap["Process"], infoMap["User"], infoMap["IPs"], infoMap["From"],
+				}
 
 				// put this row at bottom, so it's always visible
 				tail = row
@@ -272,22 +279,22 @@ func GetTargetDetails(target *emp3r0r_data.AgentSystemInfo) {
 
 	// info map
 	infoMap := map[string]string{
-		"Version":   fmt.Sprintf(target.Version),
-		"Hostname":  util.SplitLongLine(fmt.Sprintf(target.Hostname), 20),
-		"Process":   util.SplitLongLine(fmt.Sprintf(procInfo), 20),
+		"Version":   target.Version,
+		"Hostname":  util.SplitLongLine(target.Hostname, 20),
+		"Process":   util.SplitLongLine(procInfo, 20),
 		"User":      userInfo,
 		"Internet":  hasInternet,
 		"CPU":       cpuinfo,
 		"GPU":       gpuinfo,
 		"MEM":       target.Mem,
-		"Hardware":  util.SplitLongLine(fmt.Sprintf(target.Hardware), 20),
-		"Serial":    util.SplitLongLine(fmt.Sprintf(serial_no), 20),
+		"Hardware":  util.SplitLongLine(target.Hardware, 20),
+		"Serial":    util.SplitLongLine(serial_no, 20),
 		"Container": target.Container,
-		"OS":        util.SplitLongLine(fmt.Sprintf(target.OS), 20),
-		"Kernel":    util.SplitLongLine(fmt.Sprintf(target.Kernel)+", "+fmt.Sprintf(target.Arch), 20),
-		"From":      util.SplitLongLine(fmt.Sprintf(target.From)+fmt.Sprintf(" - %s", fmt.Sprintf(target.Transport)), 20),
-		"IPs":       fmt.Sprintf(ips),
-		"ARP":       fmt.Sprintf(arpTab),
+		"OS":        util.SplitLongLine(target.OS, 20),
+		"Kernel":    util.SplitLongLine(target.Kernel+", "+target.Arch, 20),
+		"From":      util.SplitLongLine(target.From+" - "+target.Transport, 20),
+		"IPs":       ips,
+		"ARP":       arpTab,
 	}
 
 	// print
@@ -308,13 +315,11 @@ func GetTargetDetails(target *emp3r0r_data.AgentSystemInfo) {
 	// rendor table
 	table.AppendBulk(tdata)
 	table.Render()
-	num_of_lines := len(strings.Split(tableString.String(), "\n"))
 	num_of_columns := len(strings.Split(tableString.String(), "\n")[0])
 	if AgentInfoPane == nil {
 		CliPrintError("AgentInfoPane doesn't exist")
 		return
 	}
-	AgentInfoPane.ResizePane("y", num_of_lines)
 	AgentInfoPane.ResizePane("x", num_of_columns)
 	AgentInfoPane.Printf(true, "\n%s\n\n", tableString.String())
 
@@ -420,7 +425,7 @@ outter:
 	}
 
 	// write file
-	err = os.WriteFile(AgentsJSON, data, 0600)
+	err = os.WriteFile(AgentsJSON, data, 0o600)
 	if err != nil {
 		CliPrintWarning("Saving labeled agents: %v", err)
 	}
@@ -499,13 +504,13 @@ func InitConfig() (err error) {
 	// set workspace to ~/.emp3r0r
 	u, err := user.Current()
 	if err != nil {
-		return fmt.Errorf("Get current user: %v", err)
+		return fmt.Errorf("get current user: %v", err)
 	}
-	EmpWorkSpace = fmt.Sprintf("%s/.emp3r0r", u.HomeDir)
+	EmpWorkSpace = u.HomeDir + "/.emp3r0r"
 	FileGetDir = EmpWorkSpace + "/file-get/"
 	EmpConfigFile = EmpWorkSpace + "/emp3r0r.json"
 	if !util.IsDirExist(EmpWorkSpace) {
-		err = os.MkdirAll(FileGetDir, 0700)
+		err = os.MkdirAll(FileGetDir, 0o700)
 		if err != nil {
 			return fmt.Errorf("mkdir %s: %v", EmpWorkSpace, err)
 		}
@@ -518,9 +523,9 @@ func InitConfig() (err error) {
 
 	// copy stub binaries to ~/.emp3r0r
 	for _, arch := range Arch_List {
-		err := util.Copy(fmt.Sprintf("%s/stub-%s", EmpBuildDir, arch), EmpWorkSpace)
-		if err != nil {
-			CliPrintWarning("Agent stubs: %v", err)
+		copyErr := util.Copy(fmt.Sprintf("%s/stub-%s", EmpBuildDir, arch), EmpWorkSpace)
+		if copyErr != nil {
+			CliPrintWarning("Agent stubs: %v", copyErr)
 		}
 	}
 	err = util.Copy(fmt.Sprintf("%s/stub-win-%s", EmpBuildDir, "amd64"), EmpWorkSpace)

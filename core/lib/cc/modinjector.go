@@ -3,7 +3,6 @@
 
 package cc
 
-
 import (
 	"fmt"
 
@@ -35,7 +34,7 @@ func moduleInjector() {
 	}
 
 	// injector cmd
-	cmd := fmt.Sprintf("%s %s %s", emp3r0r_data.C2CmdInject, method, pid)
+	cmd := fmt.Sprintf("%s --method %s --pid %s", emp3r0r_data.C2CmdInject, method, pid)
 
 	// tell agent to inject
 	err = SendCmd(cmd, "", target)

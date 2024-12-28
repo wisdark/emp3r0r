@@ -1,5 +1,281 @@
 # Changelog
 
+## [1.42.1](https://github.com/jm33-m0/emp3r0r/compare/v1.42.0...v1.42.1) (2024-12-28)
+
+
+### Bug Fixes
+
+* `ps` command output not parsed ([7ace03c](https://github.com/jm33-m0/emp3r0r/commit/7ace03c4d882db7980e63df0879f9daf8290d81f))
+* agent root path searching ([aa0941c](https://github.com/jm33-m0/emp3r0r/commit/aa0941cc90ee4021d603c8aa75cbd3c55b44c022))
+
+## [1.42.0](https://github.com/jm33-m0/emp3r0r/compare/v1.41.0...v1.42.0) (2024-12-27)
+
+
+### Features
+
+* agent side "listener" for lateral movement and payload delivery ([c4b40b8](https://github.com/jm33-m0/emp3r0r/commit/c4b40b82f25f590da11c53cbcc11b300a7698dab))
+
+
+### Bug Fixes
+
+* add some nil dereference check to improve stability ([6710ed7](https://github.com/jm33-m0/emp3r0r/commit/6710ed73f31fd58dba57af22733cad03ded32667))
+* agent path names ([2b2773a](https://github.com/jm33-m0/emp3r0r/commit/2b2773a084ced9ed172bee2426b9f1939486fffc))
+* c2 commands refactor ([fb46ae8](https://github.com/jm33-m0/emp3r0r/commit/fb46ae8a3f3042b354139f0b0d9d0528321cef7a))
+* fs commands ([4336af2](https://github.com/jm33-m0/emp3r0r/commit/4336af211d554edaf8644cc978b6167e442f12b6))
+* improve command parsing ([e5baccb](https://github.com/jm33-m0/emp3r0r/commit/e5baccb4ffd3d49dcee27b3c8434bcd538489dc3))
+* open sftp in new tmux window to save space ([c29b8c1](https://github.com/jm33-m0/emp3r0r/commit/c29b8c15115d8f53c42652ba743442c24c275bfe))
+* port_fwd should print some feedback ([1c6844f](https://github.com/jm33-m0/emp3r0r/commit/1c6844f53eeab5f81a95c8702060bd64dc180966))
+* UI adjustments and code refactor ([f6b2d00](https://github.com/jm33-m0/emp3r0r/commit/f6b2d00df39a06dbe23a911767bf6aa8ec3794cf))
+
+## [1.41.0](https://github.com/jm33-m0/emp3r0r/compare/v1.40.3...v1.41.0) (2024-12-26)
+
+
+### Features
+
+* support payload compression in stager ([97b271a](https://github.com/jm33-m0/emp3r0r/commit/97b271a9774cac8a15de58dd26727ab17034ff26))
+
+
+### Bug Fixes
+
+* `stager.so` non-debug build lacks AES support ([679b755](https://github.com/jm33-m0/emp3r0r/commit/679b755a50350e8814bebae6dd4698ff0e8b7d5f))
+
+## [1.40.3](https://github.com/jm33-m0/emp3r0r/compare/v1.40.2...v1.40.3) (2024-12-25)
+
+
+### Bug Fixes
+
+* unix socket listener may fail when path name is too long ([d7c0e98](https://github.com/jm33-m0/emp3r0r/commit/d7c0e98415eccd1d090f9ebf2d0675488e21fb00))
+
+## [1.40.2](https://github.com/jm33-m0/emp3r0r/compare/v1.40.1...v1.40.2) (2024-12-25)
+
+
+### Bug Fixes
+
+* agent dies on unix socket error ([f0757fe](https://github.com/jm33-m0/emp3r0r/commit/f0757fe9127a04be0c7ee3c7ef724757853f06e1))
+* agent wait queue ([28dadaa](https://github.com/jm33-m0/emp3r0r/commit/28dadaa76f4385bc13a52fdda0e9b5aad6782e73))
+* socket listener not running ([26802d0](https://github.com/jm33-m0/emp3r0r/commit/26802d0630be8b2e0cd366526325d739c73cc0d5))
+* unable to run from ELF loader if `VERBOSE` is `false` ([ad9aab2](https://github.com/jm33-m0/emp3r0r/commit/ad9aab27f463bd7bb7581c0f63e16d1479ac9709))
+
+## [1.40.1](https://github.com/jm33-m0/emp3r0r/compare/v1.40.0...v1.40.1) (2024-12-25)
+
+
+### Bug Fixes
+
+* AES decryption in stager ([757a386](https://github.com/jm33-m0/emp3r0r/commit/757a386969f519c45fea5ec0802e6ea3fe0297ae))
+* disable damned `chunked encoding` ([b1b0a79](https://github.com/jm33-m0/emp3r0r/commit/b1b0a798f19621319f929684db5ed4fd6dd72f79))
+
+## [1.40.0](https://github.com/jm33-m0/emp3r0r/compare/v1.39.9...v1.40.0) (2024-12-24)
+
+
+### Features
+
+* add http stager (with AES encryption) and independent HTTP listener ([66f4d8c](https://github.com/jm33-m0/emp3r0r/commit/66f4d8cc23a31381d57d93dec11478c7234fc87e))
+
+## [1.39.9](https://github.com/jm33-m0/emp3r0r/compare/v1.39.8...v1.39.9) (2024-12-21)
+
+
+### Bug Fixes
+
+* new `cc_host` not added to server cert, old names get repeated ([e3ef171](https://github.com/jm33-m0/emp3r0r/commit/e3ef1710fe8b2c679027984a30a98af9294ab687))
+
+## [1.39.8](https://github.com/jm33-m0/emp3r0r/compare/v1.39.7...v1.39.8) (2024-12-21)
+
+
+### Bug Fixes
+
+* crash when listing module options ([32cdc3d](https://github.com/jm33-m0/emp3r0r/commit/32cdc3dd91d013021282b3e8854fa6f9ad74d1ff))
+* crash when using `info` with no module selected ([a2706c9](https://github.com/jm33-m0/emp3r0r/commit/a2706c908f29113bb20b90b0e0ed6fb7054b295e))
+* do not open SFTP pane in Windows ([1e6342f](https://github.com/jm33-m0/emp3r0r/commit/1e6342f0f7ef52837819705cdc76617e34f10427))
+* only attemp SFTP on Linux ([fd36ff9](https://github.com/jm33-m0/emp3r0r/commit/fd36ff91c202497f0b0192111132b12ca08f8a04))
+* unable to view crash log in C2 client ([152ecf5](https://github.com/jm33-m0/emp3r0r/commit/152ecf52672e7a2d93c799261087321921a080a8))
+
+## [1.39.7](https://github.com/jm33-m0/emp3r0r/compare/v1.39.6...v1.39.7) (2024-12-20)
+
+
+### Bug Fixes
+
+* argv modification is not needed in Windows ([b5915c6](https://github.com/jm33-m0/emp3r0r/commit/b5915c6a1841edf3d475321229b436fb97e32190))
+
+## [1.39.6](https://github.com/jm33-m0/emp3r0r/compare/v1.39.5...v1.39.6) (2024-12-20)
+
+
+### Bug Fixes
+
+* [#345](https://github.com/jm33-m0/emp3r0r/issues/345) ([b2ea89c](https://github.com/jm33-m0/emp3r0r/commit/b2ea89c91343c67344a7494603ee18a780b38fe9))
+* compressor issue in `arc`, sync with upstream ([2a18bf8](https://github.com/jm33-m0/emp3r0r/commit/2a18bf866a78333f49f78c7717faae25032e35b7))
+* restore patched ELF's timestamps (mtime, atime) ([8d7ac5e](https://github.com/jm33-m0/emp3r0r/commit/8d7ac5e368ae08060bbdfff9f57e7cac5e4d27e0))
+* update `loader.so` ([22eaf46](https://github.com/jm33-m0/emp3r0r/commit/22eaf46f22b6260f5ed3cbe4a61a6af8561621ab))
+
+## [1.39.5](https://github.com/jm33-m0/emp3r0r/compare/v1.39.4...v1.39.5) (2024-12-19)
+
+
+### Bug Fixes
+
+* `__libc_dlopen_mode` deprecated in favor of `dlopen` as libdl.so has been merged into libc.so ([5285b93](https://github.com/jm33-m0/emp3r0r/commit/5285b93d9fc3f63242c903d3e832ebee6f10ac28))
+* fatal error in unix socket listener ([1cd3065](https://github.com/jm33-m0/emp3r0r/commit/1cd3065f044eb281b7701e385b8b88ecc91721d1))
+* more randomized persistence (WIP) ([76686b1](https://github.com/jm33-m0/emp3r0r/commit/76686b1ecf35bfe50a5d0ae72d23b949739ee59f))
+* upgrade `golang.org/x/net` ([78ac77b](https://github.com/jm33-m0/emp3r0r/commit/78ac77bb0c0ef83c812bc980c01390f018d11489))
+
+## [1.39.4](https://github.com/jm33-m0/emp3r0r/compare/v1.39.3...v1.39.4) (2024-12-18)
+
+
+### Bug Fixes
+
+* CC has no knowledge of agent root location, causing custom module to fail ([ca5f5da](https://github.com/jm33-m0/emp3r0r/commit/ca5f5da53e03d69b4cc7b584463d8af4ae94ba1d))
+* chdir error when running custom modules ([66a699f](https://github.com/jm33-m0/emp3r0r/commit/66a699f83bfb2994aa1a86635cd2bb664dfc3b90))
+* collect module output ([40fd645](https://github.com/jm33-m0/emp3r0r/commit/40fd6458173ddd815d617e06cf2e0b9ed9fd353b))
+* no need to compress module when it already exists ([54cdd18](https://github.com/jm33-m0/emp3r0r/commit/54cdd1877b86ceb57a7cc9e1ccc1d5dc3825c813))
+
+## [1.39.3](https://github.com/jm33-m0/emp3r0r/compare/v1.39.2...v1.39.3) (2024-12-18)
+
+
+### Bug Fixes
+
+* deprecated `rand.seed` ([1515072](https://github.com/jm33-m0/emp3r0r/commit/151507267235746bc937c2d16e9338126fbb3f36))
+* disable `HidePIDs` until we find a better way ([1fc1494](https://github.com/jm33-m0/emp3r0r/commit/1fc149475f69628935547c6164a2a1dbc63b3664))
+* do not create any files in Windows ([82975d7](https://github.com/jm33-m0/emp3r0r/commit/82975d785837f8339cd6e4ba53d582c67326b6a8))
+* dont use `.exe` for Linux agents ([1b55009](https://github.com/jm33-m0/emp3r0r/commit/1b55009649bf2a170304b55f1db246ffcc045d4f))
+* minor bugs and code optimization ([5e72139](https://github.com/jm33-m0/emp3r0r/commit/5e72139b4492e97a19bd94ee2ba2f1c2f3521bbe))
+* path searching: crash ([e982019](https://github.com/jm33-m0/emp3r0r/commit/e9820193796fbb4631b23bed9ac6d8deab1ab1b6))
+* path searching: crash ([24ff532](https://github.com/jm33-m0/emp3r0r/commit/24ff5328a7787371fc4dd713fde95c34ebc001ea))
+* randomize agent root even more (Linux) ([e96511c](https://github.com/jm33-m0/emp3r0r/commit/e96511ce17c1b9fda504c8869a07bfd14704c8f3))
+* simple stagers ([a6d191d](https://github.com/jm33-m0/emp3r0r/commit/a6d191df9f349accf91c92f0d1f083373b147a47))
+* typo in stager name ([442252d](https://github.com/jm33-m0/emp3r0r/commit/442252dd95dbfbf8566294e69aaf2ad0d3aa4d8f))
+* use shadowsocks with kcptun by default ([791736d](https://github.com/jm33-m0/emp3r0r/commit/791736de3f295d486f41896999103ff814dcbde5))
+
+## [1.39.2](https://github.com/jm33-m0/emp3r0r/compare/v1.39.1...v1.39.2) (2024-12-17)
+
+
+### Bug Fixes
+
+* unable to find config data in shellcode mode ([d99be9f](https://github.com/jm33-m0/emp3r0r/commit/d99be9ffb853b8d19b3ac36aa192dee8e7506613))
+
+## [1.39.1](https://github.com/jm33-m0/emp3r0r/compare/v1.39.0...v1.39.1) (2024-12-17)
+
+
+### Bug Fixes
+
+* use donut from upstream to support compression and latest features ([a212200](https://github.com/jm33-m0/emp3r0r/commit/a2122004c6b25fffcc9aeb0dd99e380a60dc3add))
+
+## [1.39.0](https://github.com/jm33-m0/emp3r0r/compare/v1.38.4...v1.39.0) (2024-12-16)
+
+
+### Features
+
+* integrate donut (WIP) ([93c76f2](https://github.com/jm33-m0/emp3r0r/commit/93c76f24fbf6231f7d11f2229da3ef44cb9eac14))
+
+
+### Bug Fixes
+
+* possible crash ([e568438](https://github.com/jm33-m0/emp3r0r/commit/e56843899a3b086eddf670b9d50ea142fda95f65))
+
+## [1.38.4](https://github.com/jm33-m0/emp3r0r/compare/v1.38.3...v1.38.4) (2024-11-23)
+
+
+### Bug Fixes
+
+* module start scripts don't need compression ([aa4869f](https://github.com/jm33-m0/emp3r0r/commit/aa4869f05573f1fba090a6134353e80a7963c517))
+* switch to `arc` as `archiver` is deprecated ([17ed290](https://github.com/jm33-m0/emp3r0r/commit/17ed290b4917f868c76a8fea4abb2efb9021cba5))
+* switch to `archives` as `archiver` is deprecated ([de0b493](https://github.com/jm33-m0/emp3r0r/commit/de0b4932338db2664b01938bd3b9a0ee4a4f3d66))
+
+## [1.38.3](https://github.com/jm33-m0/emp3r0r/compare/v1.38.2...v1.38.3) (2024-10-25)
+
+
+### Bug Fixes
+
+* re-implement kcp C2 based on kcptun, use single UDP connection ([331b857](https://github.com/jm33-m0/emp3r0r/commit/331b8575dbd765d822021ec928489a1fae55f83e))
+
+## [1.38.2](https://github.com/jm33-m0/emp3r0r/compare/v1.38.1...v1.38.2) (2024-10-24)
+
+
+### Bug Fixes
+
+* some traffic bypasses shadowsocks/kcp proxy ([a45b14c](https://github.com/jm33-m0/emp3r0r/commit/a45b14cc44e48ca0b50a3ee6b844167a8741f1fd))
+
+## [1.38.1](https://github.com/jm33-m0/emp3r0r/compare/v1.38.0...v1.38.1) (2024-10-24)
+
+
+### Bug Fixes
+
+* `unarchive` secure path validation ([ce61818](https://github.com/jm33-m0/emp3r0r/commit/ce618182704c3f0f92974163c9fba20f2927a119))
+* `Unarchive` with `archiver/v4` implementation ([fc96304](https://github.com/jm33-m0/emp3r0r/commit/fc96304c4524d14242bab9ac7c9251cbda8573f7))
+* add `config.json` for `mimikatz` module ([a99139c](https://github.com/jm33-m0/emp3r0r/commit/a99139cf819cad3709c46b93b2d499f2b7027849))
+* agent root directory missing `/` ([a3ef9b4](https://github.com/jm33-m0/emp3r0r/commit/a3ef9b49312b995b9576e9a60d4f91a6ba721e33))
+* make sure stdin closes ([a328ea8](https://github.com/jm33-m0/emp3r0r/commit/a328ea8cf1acbbfe67cd4874f570f2997725b64a))
+* mimikatz's documentation ([3741b36](https://github.com/jm33-m0/emp3r0r/commit/3741b362e9c73cac643a65eb65de54e13989843d))
+* permission error for Linux modules ([bf0ab59](https://github.com/jm33-m0/emp3r0r/commit/bf0ab5983dcada63541bccedddecb06a3095fcd5))
+* remove `archiver/v3` ([#318](https://github.com/jm33-m0/emp3r0r/issues/318)) ([03e6367](https://github.com/jm33-m0/emp3r0r/commit/03e6367988fd10369f8ddd4d8b0d8dffa82b3eec))
+* use Go's built-in filepath sanitization ([db76751](https://github.com/jm33-m0/emp3r0r/commit/db767513f4e9dbd2a12aa954e40e17426a0b58ad))
+* verbose ([9786e1f](https://github.com/jm33-m0/emp3r0r/commit/9786e1fdd452650f07971c45cc72344ec8c5b4e1))
+
+## [1.38.0](https://github.com/jm33-m0/emp3r0r/compare/v1.37.8...v1.38.0) (2024-10-23)
+
+
+### Features
+
+* add mimikatz (no AV evasion) ([f1a44fc](https://github.com/jm33-m0/emp3r0r/commit/f1a44fcf74303d56fd89005e9233476807960d26))
+* support in-memory ps1 modules ([959517b](https://github.com/jm33-m0/emp3r0r/commit/959517bf43c547c9fdaad503a1ce81343048d017))
+
+
+### Bug Fixes
+
+* agent root naming in Windows ([ff6ee40](https://github.com/jm33-m0/emp3r0r/commit/ff6ee401658508b57e3daaf1b2059de295153757))
+* in-memory execution of ps1 modules ([d755ae6](https://github.com/jm33-m0/emp3r0r/commit/d755ae67e0f7748af754fa88654d485f3108c787))
+
+## [1.37.8](https://github.com/jm33-m0/emp3r0r/compare/v1.37.7...v1.37.8) (2024-10-21)
+
+
+### Bug Fixes
+
+* release-please: switch to `tar.zst` ([d430c7d](https://github.com/jm33-m0/emp3r0r/commit/d430c7d2fe05f334c51af270280e99a2c9c624dd))
+
+## [1.37.7](https://github.com/jm33-m0/emp3r0r/compare/v1.37.6...v1.37.7) (2024-10-21)
+
+
+### Bug Fixes
+
+* build: switch to `zstd` ([d7e1eeb](https://github.com/jm33-m0/emp3r0r/commit/d7e1eeb8d9b02c2a6e71cb8e4805e05fba8f657b))
+* update deps ([f4b177f](https://github.com/jm33-m0/emp3r0r/commit/f4b177fe287448df7e3bd4d403bc037e6510c4f3))
+* use trusted built-in CA pool ([8ae44f0](https://github.com/jm33-m0/emp3r0r/commit/8ae44f0eab5b1f9df8608da33861ddf4a711a0b6))
+
+## [1.37.6](https://github.com/jm33-m0/emp3r0r/compare/v1.37.5...v1.37.6) (2024-10-20)
+
+
+### Bug Fixes
+
+* deprecate MS NCSI as it doesn't support HTTPS ([62f2115](https://github.com/jm33-m0/emp3r0r/commit/62f21154b29daddfb944670fd334a5b18ce2f9c6))
+
+## [1.37.5](https://github.com/jm33-m0/emp3r0r/compare/v1.37.4...v1.37.5) (2024-10-20)
+
+
+### Bug Fixes
+
+* req verification for `DownloadViaCC` ([e40db33](https://github.com/jm33-m0/emp3r0r/commit/e40db33f985beb572758a18a3b9d4d010bea6f64))
+
+## [1.37.4](https://github.com/jm33-m0/emp3r0r/compare/v1.37.3...v1.37.4) (2024-09-23)
+
+
+### Bug Fixes
+
+* [#318](https://github.com/jm33-m0/emp3r0r/issues/318) ([ac2a682](https://github.com/jm33-m0/emp3r0r/commit/ac2a682b224d43382e7ac48320b7b3450547955c))
+* delete orphaned functions ([7b744c1](https://github.com/jm33-m0/emp3r0r/commit/7b744c11fb2151c27aa895bf650286aaf52a7aa1))
+
+## [1.37.3](https://github.com/jm33-m0/emp3r0r/compare/v1.37.2...v1.37.3) (2024-09-23)
+
+
+### Bug Fixes
+
+* AES encryption: use GCM for authentication ([e713898](https://github.com/jm33-m0/emp3r0r/commit/e713898da991df9306a1ac5ce133aa93f913b6e8))
+* agent authentication ([a2386e2](https://github.com/jm33-m0/emp3r0r/commit/a2386e2c0acc5305e4e65f0bcd244b12b15fc778))
+* typo ([326461c](https://github.com/jm33-m0/emp3r0r/commit/326461c3b2534adef93699cd52b71438cbf80fdc))
+
+## [1.37.2](https://github.com/jm33-m0/emp3r0r/compare/v1.37.1...v1.37.2) (2024-09-17)
+
+
+### Bug Fixes
+
+* some crypto functions ([e425081](https://github.com/jm33-m0/emp3r0r/commit/e4250812b50ba6ce252a43dc405c529ff0584767))
+
 ## [1.37.1](https://github.com/jm33-m0/emp3r0r/compare/v1.37.0...v1.37.1) (2024-04-21)
 
 

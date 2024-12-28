@@ -3,7 +3,6 @@
 
 package cc
 
-
 import (
 	"errors"
 	"fmt"
@@ -31,7 +30,7 @@ func DownloadFile(url, path string) (err error) {
 // SendCmd send command to agent
 func SendCmd(cmd, cmd_id string, a *emp3r0r_data.AgentSystemInfo) error {
 	if a == nil {
-		return fmt.Errorf("SendCmd: agent '%s' not found", a.Tag)
+		return errors.New("SendCmd: agent not found")
 	}
 
 	var cmdData emp3r0r_data.MsgTunData
@@ -131,7 +130,7 @@ func VimEdit(filepath string) (err error) {
 	defer func() {
 		err = os.Remove(Temp + "vim.pane")
 		if err != nil {
-			CliPrintWarning(err.Error())
+			CliPrintWarning("%v", err)
 		}
 	}()
 
@@ -154,7 +153,7 @@ func VimEdit(filepath string) (err error) {
 				CliPrintSuccess("Vim has done editing")
 				return nil
 			}
-			CliPrintError(err.Error())
+			CliPrintError("%v", err)
 			break
 		}
 	}

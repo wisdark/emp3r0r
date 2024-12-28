@@ -3,15 +3,13 @@ package util
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
-
-	"github.com/mholt/archiver/v4"
 )
 
 // Dentry Directory entry
@@ -43,9 +41,9 @@ func LsPath(path string) (res string, err error) {
 	// parse
 	var dents []Dentry
 	for _, f := range files {
-		info, err := f.Info()
-		if err != nil {
-			log.Printf("LsPath: %v", err)
+		info, statErr := f.Info()
+		if statErr != nil {
+			log.Printf("LsPath: %v", statErr)
 			continue
 		}
 		var dent Dentry
@@ -87,12 +85,8 @@ func IsFileExist(path string) bool {
 
 // IsExist check if a path exists
 func IsExist(path string) bool {
-	_, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return false
-	}
-
-	return true
+	_, statErr := os.Stat(path)
+	return !os.IsNotExist(statErr)
 }
 
 // IsDirExist check if a directory exists
@@ -143,7 +137,7 @@ func IntArrayToStringArray(arr []int) []string {
 
 // AppendToFile append bytes to a file
 func AppendToFile(filename string, data []byte) (err error) {
-	f, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}
@@ -157,7 +151,7 @@ func AppendToFile(filename string, data []byte) (err error) {
 
 // AppendTextToFile append text to a file
 func AppendTextToFile(filename string, text string) (err error) {
-	f, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}
@@ -211,19 +205,13 @@ func Copy(src, dst string) error {
 		}
 	}
 
-	return os.WriteFile(dst, in, 0755)
+	return os.WriteFile(dst, in, 0o755)
 }
 
-// FileBaseName /path/to/foo -> foo
-func FileBaseName(filepath string) (filename string) {
-	sep := RandStr(10)
-	// we only need the filename
-	filepath = strings.ReplaceAll(filepath, "/", sep)  // DOS path symbol
-	filepath = strings.ReplaceAll(filepath, "\\", sep) // DOS path symbol
-	filepath = strings.ReplaceAll(filepath, "..", "")  // prevent directory traversal
-	filepathSplit := strings.Split(filepath, sep)
-	filename = filepathSplit[len(filepathSplit)-1]
-	return
+// FileBaseName extracts the base name of the file from a given path.
+func FileBaseName(path string) string {
+	// Use the standard library to safely get the base name
+	return filepath.Base(filepath.Clean(path))
 }
 
 // FileAllocate allocate n bytes for a file, will delete the target file if already exists
@@ -254,48 +242,6 @@ func FileSize(path string) (size int64) {
 	return
 }
 
-func TarXZ(dir, outfile string) error {
-	// remove outfile
-	os.RemoveAll(outfile)
-
-	if !IsExist(dir) {
-		return fmt.Errorf("%s does not exist", dir)
-	}
-
-	// map files on disk to their paths in the archive
-	archive_dir_name := FileBaseName(dir)
-	if dir == "." {
-		archive_dir_name = ""
-	}
-	files, err := archiver.FilesFromDisk(nil, map[string]string{
-		dir: archive_dir_name,
-	})
-	if err != nil {
-		return err
-	}
-
-	// create the output file we'll write to
-	outf, err := os.Create(outfile)
-	if err != nil {
-		return err
-	}
-	defer outf.Close()
-
-	// we can use the CompressedArchive type to gzip a tarball
-	// (compression is not required; you could use Tar directly)
-	format := archiver.CompressedArchive{
-		Compression: archiver.Xz{},
-		Archival:    archiver.Tar{},
-	}
-
-	// create the archive
-	err = format.Archive(context.Background(), outf, files)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 func ReplaceBytesInFile(path string, old []byte, replace_with []byte) (err error) {
 	file_bytes, err := os.ReadFile(path)
 	if err != nil {
@@ -303,7 +249,7 @@ func ReplaceBytesInFile(path string, old []byte, replace_with []byte) (err error
 	}
 
 	to_write := bytes.ReplaceAll(file_bytes, old, replace_with)
-	return os.WriteFile(path, to_write, 0644)
+	return os.WriteFile(path, to_write, 0o644)
 }
 
 // FindHolesInBinary find holes in a binary file that are big enough for a payload
@@ -333,4 +279,69 @@ func FindHolesInBinary(fdata []byte, size int64) (indexes []int64, err error) {
 	}
 
 	return
+}
+
+// IsDirWritable check if a directory is writable
+func IsDirWritable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	if !info.IsDir() {
+		return false
+	}
+	// Check if the current user can write to the directory
+	testFile := filepath.Join(path, fmt.Sprintf("%s", RandMD5String()))
+	file, err := os.Create(testFile)
+	if err != nil {
+		return false
+	}
+	file.Close()
+	os.Remove(testFile)
+	return true
+}
+
+// GetWritablePaths get all writable paths in a directory up to a given depth
+func GetWritablePaths(root_path string, depth int) ([]string, error) {
+	if depth < 0 {
+		return nil, fmt.Errorf("Invalid depth: %d", depth)
+	}
+
+	var writablePaths []string
+	var searchPaths func(path string, currentDepth int) error
+
+	searchPaths = func(path string, currentDepth int) error {
+		if currentDepth > depth {
+			return nil
+		}
+
+		files, err := os.ReadDir(path)
+		if err != nil {
+			log.Printf("Skipping unreadable directory %s: %v", path, err)
+			return nil
+		}
+
+		for _, file := range files {
+			fullPath := filepath.Join(path, file.Name())
+			if file.IsDir() {
+				if IsDirWritable(fullPath) {
+					writablePaths = append(writablePaths, fullPath)
+				}
+				if err := searchPaths(fullPath, currentDepth+1); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	if err := searchPaths(root_path, 0); err != nil {
+		return nil, err
+	}
+
+	if len(writablePaths) == 0 {
+		return nil, fmt.Errorf("No writable paths found in %s", root_path)
+	}
+
+	return writablePaths, nil
 }

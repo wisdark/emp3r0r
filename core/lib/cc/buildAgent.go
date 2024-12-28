@@ -4,11 +4,11 @@
 package cc
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 
-	"github.com/bettercap/readline"
 	"github.com/google/uuid"
 	emp3r0r_data "github.com/jm33-m0/emp3r0r/core/lib/data"
 	"github.com/jm33-m0/emp3r0r/core/lib/tun"
@@ -25,25 +25,6 @@ var Arch_List = []string{
 	"riscv64",
 }
 
-// PackAgentBinary pack agent ELF binary with Packer()
-func PackAgentBinary() {
-	// completer
-	compls := []readline.PrefixCompleterInterface{
-		readline.PcItemDynamic(listLocalFiles("./"))}
-	CliCompleter.SetChildren(compls)
-	defer CliCompleter.SetChildren(CmdCompls)
-
-	// ask
-	answ := CliAsk("Path to agent binary: ", false)
-
-	go func() {
-		err := Packer(answ)
-		if err != nil {
-			CliPrintError("PackAgentBinary: %v", err)
-		}
-	}()
-}
-
 func UpgradeAgent() {
 	if !util.IsExist(WWWRoot + "agent") {
 		CliPrintError("%s/agent not found, build one with `use gen_agent` first", WWWRoot)
@@ -56,13 +37,11 @@ func UpgradeAgent() {
 // read config by key from emp3r0r.json
 func read_cached_config(config_key string) (val interface{}) {
 	// read existing config when possible
-	var (
-		jsonData   []byte
-		config_map map[string]interface{}
-	)
+	var config_map map[string]interface{}
+
 	if util.IsExist(EmpConfigFile) {
 		CliPrintInfo("Reading config '%s' from existing %s", config_key, EmpConfigFile)
-		jsonData, err = os.ReadFile(EmpConfigFile)
+		jsonData, err := os.ReadFile(EmpConfigFile)
 		if err != nil {
 			CliPrintWarning("failed to read %s: %v", EmpConfigFile, err)
 			return ""
@@ -74,10 +53,9 @@ func read_cached_config(config_key string) (val interface{}) {
 			return ""
 		}
 	}
-	exists := false
-	val, exists = config_map[config_key]
+	val, exists := config_map[config_key]
 	if !exists {
-		err = fmt.Errorf("%s not found in JSON config", config_key)
+		CliPrintWarning("%s not found in JSON config", config_key)
 		return ""
 	}
 	return val
@@ -87,14 +65,11 @@ func read_cached_config(config_key string) (val interface{}) {
 func GenC2Certs(hosts []string) (err error) {
 	if !util.IsFileExist(CAKeyFile) || !util.IsFileExist(CACrtFile) {
 		CliPrint("CA cert not found, generating...")
-		err = tun.GenCerts(nil, "", true)
+		_, err = tun.GenCerts(nil, "", true)
 		if err != nil {
 			return fmt.Errorf("Generate CA: %v", err)
 		}
 		CliPrintInfo("CA fingerprint: %s", RuntimeConfig.CAFingerprint)
-	}
-	if !util.IsFileExist(CAKeyFile) || !util.IsFileExist(CACrtFile) {
-		return fmt.Errorf("%s or %s still not found, CA cert generation failed", CAKeyFile, CACrtFile)
 	}
 
 	// save CA cert to emp3r0r.json
@@ -106,7 +81,8 @@ func GenC2Certs(hosts []string) (err error) {
 	// generate server cert
 	CliPrint("Server cert not found, generating...")
 	CliPrintInfo("Server cert fingerprint: %s", tun.GetFingerprint(ServerCrtFile))
-	return tun.GenCerts(hosts, "emp3r0r", false)
+	_, err = tun.GenCerts(hosts, "emp3r0r", false)
+	return
 }
 
 func save_config_json() (err error) {
@@ -119,7 +95,7 @@ func save_config_json() (err error) {
 		return fmt.Errorf("Saving %s: %v", EmpConfigFile, err)
 	}
 
-	return os.WriteFile(EmpConfigFile, w_data, 0600)
+	return os.WriteFile(EmpConfigFile, w_data, 0o600)
 }
 
 func InitConfigFile(cc_host string) (err error) {
@@ -142,14 +118,10 @@ func InitConfigFile(cc_host string) (err error) {
 
 	// random strings
 	RuntimeConfig.AgentUUID = uuid.NewString()
-	agent_root := util.RandStr(util.RandInt(6, 20))
-	RuntimeConfig.AgentRoot = fmt.Sprintf("/tmp/ssh-%v", agent_root)
-	utils_path := util.RandStr(util.RandInt(3, 20))
-	RuntimeConfig.UtilsPath = fmt.Sprintf("%s/%v", RuntimeConfig.AgentRoot, utils_path)
-	socket := util.RandStr(util.RandInt(3, 20))
-	RuntimeConfig.SocketName = fmt.Sprintf("%s/%v", RuntimeConfig.AgentRoot, socket)
-	pid_file := util.RandStr(util.RandInt(3, 20))
-	RuntimeConfig.PIDFile = fmt.Sprintf("%s/%v", RuntimeConfig.AgentRoot, pid_file)
+	RuntimeConfig.AgentRoot = util.RandMD5String()
+	RuntimeConfig.UtilsPath = util.RandMD5String()
+	RuntimeConfig.SocketName = util.RandMD5String()
+	RuntimeConfig.PIDFile = util.RandMD5String()
 	RuntimeConfig.Password = util.RandStr(20)
 
 	// time intervals
@@ -158,6 +130,14 @@ func InitConfigFile(cc_host string) (err error) {
 	RuntimeConfig.IndicatorWaitMin = 30
 	RuntimeConfig.IndicatorWaitMax = 130
 	RuntimeConfig.AutoProxyTimeout = 0 // disable timeout by default, leave it to the OS
+
+	// sign agent UUID
+	sig, err := tun.SignWithCAKey([]byte(RuntimeConfig.AgentUUID))
+	if err != nil {
+		return fmt.Errorf("failed to sign agent UUID: %v", err)
+	}
+	// base64 encode the sig
+	RuntimeConfig.AgentUUIDSig = base64.URLEncoding.EncodeToString(sig)
 
 	return save_config_json()
 }

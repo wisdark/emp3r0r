@@ -3,7 +3,6 @@
 
 package cc
 
-
 import (
 	"encoding/json"
 	"fmt"
@@ -101,7 +100,7 @@ func processAgentData(data *emp3r0r_data.MsgTunData) {
 		}()
 
 		// ps command
-	case "#ps":
+	case "ps":
 		var procs []util.ProcEntry
 		err = json.Unmarshal([]byte(out), &procs)
 		if err != nil {

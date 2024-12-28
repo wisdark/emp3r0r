@@ -3,7 +3,6 @@
 
 package cc
 
-
 import (
 	"fmt"
 
@@ -41,8 +40,8 @@ func moduleLPE() {
 
 		// exec
 		CliMsg("This can take some time, please be patient")
-		cmd := fmt.Sprintf("%s %s", emp3r0r_data.C2CmdLPE, helperName)
-		CliPrintInfo("Running " + cmd)
+		cmd := fmt.Sprintf("%s --script_name %s", emp3r0r_data.C2CmdLPE, helperName)
+		CliPrintInfo("Running %s", cmd)
 		err = SendCmd(cmd, "", target)
 		if err != nil {
 			CliPrintError("Run %s: %v", cmd, err)

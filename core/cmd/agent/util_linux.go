@@ -14,10 +14,11 @@ import (
 
 // listen on a unix socket, used to check if agent is responsive
 func socketListen() {
+	log.Printf("Starting socket listener on %s", agent.RuntimeConfig.SocketName)
 	// if socket file exists
 	if util.IsExist(agent.RuntimeConfig.SocketName) {
 		log.Printf("%s exists, testing connection...", agent.RuntimeConfig.SocketName)
-		if isAgentAlive() {
+		if isAgentAliveSocket() {
 			log.Fatalf("%s exists, and agent is alive, aborting", agent.RuntimeConfig.SocketName)
 		}
 		err := os.Remove(agent.RuntimeConfig.SocketName)
@@ -25,12 +26,18 @@ func socketListen() {
 			log.Fatalf("Failed to delete socket: %v", err)
 		}
 	}
-
-	l, err := net.Listen("unix", agent.RuntimeConfig.SocketName)
+	cwd, err := os.Getwd()
 	if err != nil {
-		log.Fatal("listen error:", err)
+		log.Fatalf("Failed to get current working directory: %v", err)
 	}
+	os.Chdir(agent.RuntimeConfig.AgentRoot)
+	defer os.Chdir(cwd)
 
+	// use basename to make sure the socket path is not too long (107), otherwise it will fail
+	l, err := net.Listen("unix", util.FileBaseName(agent.RuntimeConfig.SocketName))
+	if err != nil {
+		log.Fatalf("listen error: %v", err)
+	}
 	for {
 		fd, err := l.Accept()
 		if err != nil {
